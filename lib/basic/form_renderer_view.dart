@@ -166,24 +166,29 @@ class _FormRendererViewState extends State<FormRendererView> {
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ..._buildRows(),
-            const SizedBox(height: 8),
-            ElevatedButton(onPressed: _onSubmit, child: const Text('Submit')),
-            if (_submitResult != null) ...[
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 8),
-              SelectableText(
-                _submitResult!,
-                style: const TextStyle(fontFamily: 'monospace'),
-              ),
-            ],
-          ],
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 960),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ..._buildRows(),
+                const SizedBox(height: 8),
+                ElevatedButton(onPressed: _onSubmit, child: const Text('Submit')),
+                if (_submitResult != null) ...[
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    _submitResult!,
+                    style: const TextStyle(fontFamily: 'monospace'),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

@@ -44,11 +44,16 @@ class _BasicTabState extends State<BasicTab> {
       initialIndex: 0,
       child: Column(
         children: [
-          const TabBar(
-            tabs: [
-              Tab(text: 'Form Renderer'),
-              Tab(text: 'Hello World'),
-            ],
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 960),
+              child: const TabBar(
+                tabs: [
+                  Tab(text: 'Form Renderer'),
+                  Tab(text: 'Hello World'),
+                ],
+              ),
+            ),
           ),
           Expanded(
             child: TabBarView(

@@ -35,12 +35,17 @@ class _HomePageState extends State<HomePage> {
         ),
         body: Column(
           children: [
-            const TabBar(
-              tabs: [
-                Tab(text: 'App'),
-                Tab(text: 'Admin'),
-                Tab(text: 'Basic'),
-              ],
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: const TabBar(
+                  tabs: [
+                    Tab(text: 'App'),
+                    Tab(text: 'Admin'),
+                    Tab(text: 'Basic'),
+                  ],
+                ),
+              ),
             ),
             Expanded(
               child: TabBarView(
