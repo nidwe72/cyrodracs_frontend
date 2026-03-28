@@ -30,8 +30,7 @@ class _HomePageState extends State<HomePage> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          backgroundColor: const Color(0xFF424242),
-          title: const Text('Cyrodracs', style: TextStyle(color: Colors.white)),
+          title: const Text('Cyrodracs'),
         ),
         body: Column(
           children: [

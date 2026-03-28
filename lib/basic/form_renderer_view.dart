@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
 import '../models/data_form_element.dart';
 
 class FormRendererView extends StatefulWidget {
@@ -43,7 +44,12 @@ class _FormRendererViewState extends State<FormRendererView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ...widget.elements.map((e) => _buildField(e)),
+            FB5Row(
+              classNames: 'g-3',
+              children: widget.elements
+                  .map((e) => FB5Col(classNames: 'col-12 col-md-6', child: _buildField(e)))
+                  .toList(),
+            ),
             const SizedBox(height: 8),
             ElevatedButton(onPressed: _onSubmit, child: const Text('Submit')),
             if (_submitResult != null) ...[
