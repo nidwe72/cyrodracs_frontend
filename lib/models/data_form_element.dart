@@ -40,4 +40,18 @@ class DataFormElement {
     this.max,
     this.rows,
   });
+
+  factory DataFormElement.fromJson(Map<String, dynamic> json) {
+    return DataFormElement(
+      key: json['key'] as String,
+      label: json['label'] as String,
+      type: DataFormElementType.values.byName(json['type'] as String),
+      options: (json['options'] as List<dynamic>?)?.cast<String>() ?? [],
+      cols: json['cols'] as int? ?? 12,
+      breakBefore: json['breakBefore'] as bool? ?? false,
+      min: (json['min'] as num?)?.toDouble(),
+      max: (json['max'] as num?)?.toDouble(),
+      rows: json['rows'] as int?,
+    );
+  }
 }

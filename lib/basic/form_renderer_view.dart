@@ -66,7 +66,7 @@ class _FormRendererViewState extends State<FormRendererView> {
     return FB5Row(
       classNames: 'g-3',
       children: elements
-          .map((e) => FB5Col(classNames: 'col-${e.cols}', child: _buildField(e)))
+          .map((e) => FB5Col(classNames: 'col-12 col-md-${e.cols}', child: _buildField(e)))
           .toList(),
     );
   }

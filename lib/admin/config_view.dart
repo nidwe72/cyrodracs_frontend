@@ -233,80 +233,94 @@ class _ConfigViewState extends State<ConfigView> {
     final visible = _buildVisible();
     final matchKeySet = _matchKeys.toSet();
 
-    return Focus(
-      focusNode: _focusNode,
-      onKeyEvent: _onKey,
-      child: Row(
-        children: [
-          SizedBox(
-            width: 320,
-            child: Column(
+    final treePanel = Column(
+      children: [
+        if (_searchPattern.isNotEmpty)
+          Container(
+            color: Colors.grey.shade200,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
               children: [
-                if (_searchPattern.isNotEmpty)
-                  Container(
-                    color: Colors.grey.shade200,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.search, size: 16),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(_searchPattern, style: const TextStyle(fontFamily: 'monospace')),
-                        ),
-                        if (_matchKeys.isNotEmpty)
-                          Text('${_matchIndex + 1} / ${_matchKeys.length}',
-                              style: const TextStyle(fontSize: 12, color: Colors.grey))
-                        else
-                          const Text('no matches', style: TextStyle(fontSize: 12, color: Colors.red)),
-                        const SizedBox(width: 8),
-                        InkWell(onTap: _clearSearch, child: const Icon(Icons.close, size: 16)),
-                      ],
-                    ),
-                  ),
+                const Icon(Icons.search, size: 16),
+                const SizedBox(width: 6),
                 Expanded(
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    itemCount: visible.length,
-                    itemExtent: 32,
-                    itemBuilder: (context, i) {
-                      final vn = visible[i];
-                      final isSelected = vn.key == _selectedKey;
-                      final isExpanded = _expandedKeys.contains(vn.key);
-                      final hasChildren = vn.node.children.isNotEmpty;
-                      final isMatch = matchKeySet.contains(vn.key);
-                      return TreeRow(
-                        node: vn.node,
-                        depth: vn.depth,
-                        isSelected: isSelected,
-                        isExpanded: isExpanded,
-                        hasChildren: hasChildren,
-                        isMatch: isMatch,
-                        onTap: () {
-                          setState(() => _selectedKey = vn.key);
-                          _focusNode.requestFocus();
-                        },
-                        onDoubleTap: () {
-                          setState(() => _selectedKey = vn.key);
-                          _showDetail(vn.key, vn.node);
-                          _focusNode.requestFocus();
-                        },
-                        onToggle: () => setState(() {
-                          if (isExpanded) {
-                            _expandedKeys.remove(vn.key);
-                          } else {
-                            _expandedKeys.add(vn.key);
-                          }
-                        }),
-                      );
-                    },
-                  ),
+                  child: Text(_searchPattern, style: const TextStyle(fontFamily: 'monospace')),
                 ),
+                if (_matchKeys.isNotEmpty)
+                  Text('${_matchIndex + 1} / ${_matchKeys.length}',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey))
+                else
+                  const Text('no matches', style: TextStyle(fontSize: 12, color: Colors.red)),
+                const SizedBox(width: 8),
+                InkWell(onTap: _clearSearch, child: const Icon(Icons.close, size: 16)),
               ],
             ),
           ),
-          const VerticalDivider(width: 1, thickness: 1),
-          Expanded(child: DetailPanel(node: _detailNode, stale: _detailKey != _selectedKey)),
-        ],
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            itemCount: visible.length,
+            itemExtent: 32,
+            itemBuilder: (context, i) {
+              final vn = visible[i];
+              final isSelected = vn.key == _selectedKey;
+              final isExpanded = _expandedKeys.contains(vn.key);
+              final hasChildren = vn.node.children.isNotEmpty;
+              final isMatch = matchKeySet.contains(vn.key);
+              return TreeRow(
+                node: vn.node,
+                depth: vn.depth,
+                isSelected: isSelected,
+                isExpanded: isExpanded,
+                hasChildren: hasChildren,
+                isMatch: isMatch,
+                onTap: () {
+                  setState(() => _selectedKey = vn.key);
+                  _focusNode.requestFocus();
+                },
+                onDoubleTap: () {
+                  setState(() => _selectedKey = vn.key);
+                  _showDetail(vn.key, vn.node);
+                  _focusNode.requestFocus();
+                },
+                onToggle: () => setState(() {
+                  if (isExpanded) {
+                    _expandedKeys.remove(vn.key);
+                  } else {
+                    _expandedKeys.add(vn.key);
+                  }
+                }),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+
+    final detailPanel = DetailPanel(node: _detailNode, stale: _detailKey != _selectedKey);
+
+    return Focus(
+      focusNode: _focusNode,
+      onKeyEvent: _onKey,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 600) {
+            return Column(
+              children: [
+                Expanded(child: treePanel),
+                const Divider(height: 1, thickness: 1),
+                Expanded(child: detailPanel),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              SizedBox(width: 320, child: treePanel),
+              const VerticalDivider(width: 1, thickness: 1),
+              Expanded(child: detailPanel),
+            ],
+          );
+        },
       ),
     );
   }
