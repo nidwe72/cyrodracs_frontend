@@ -27,7 +27,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
+      initialIndex: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Cyrodracs'),
@@ -36,6 +37,7 @@ class _HomePageState extends State<HomePage> {
           children: [
             const TabBar(
               tabs: [
+                Tab(text: 'App'),
                 Tab(text: 'Admin'),
                 Tab(text: 'Basic'),
               ],
@@ -43,6 +45,7 @@ class _HomePageState extends State<HomePage> {
             Expanded(
               child: TabBarView(
                 children: [
+                  const SizedBox.shrink(),
                   const AdminTab(),
                   BasicTab(
                     helloMessage: _helloMessage,

@@ -41,17 +41,19 @@ class _BasicTabState extends State<BasicTab> {
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 2,
+      initialIndex: 0,
       child: Column(
         children: [
           const TabBar(
             tabs: [
-              Tab(text: 'Hello World'),
               Tab(text: 'Form Renderer'),
+              Tab(text: 'Hello World'),
             ],
           ),
           Expanded(
             child: TabBarView(
               children: [
+                _buildFormTab(),
                 Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -70,7 +72,6 @@ class _BasicTabState extends State<BasicTab> {
                     ],
                   ),
                 ),
-                _buildFormTab(),
               ],
             ),
           ),
