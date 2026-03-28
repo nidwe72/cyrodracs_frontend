@@ -1,4 +1,18 @@
 import 'package:flutter/material.dart';
+import '../models/data_form_element.dart';
+import 'form_renderer_view.dart';
+
+const _demoElements = [
+  DataFormElement(key: 'firstName', label: 'First Name', type: DataFormElementType.inputString),
+  DataFormElement(key: 'lastName',  label: 'Last Name',  type: DataFormElementType.inputString),
+  DataFormElement(
+    key: 'country',
+    label: 'Country',
+    type: DataFormElementType.select,
+    options: ['Austria', 'France', 'Germany', 'Italy', 'Switzerland'],
+  ),
+  DataFormElement(key: 'birthDate', label: 'Birth Date', type: DataFormElementType.datePicker),
+];
 
 class BasicTab extends StatelessWidget {
   final String? helloMessage;
@@ -9,12 +23,13 @@ class BasicTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 1,
+      length: 2,
       child: Column(
         children: [
           const TabBar(
             tabs: [
               Tab(text: 'Hello World'),
+              Tab(text: 'Form Renderer'),
             ],
           ),
           Expanded(
@@ -38,6 +53,7 @@ class BasicTab extends StatelessWidget {
                     ],
                   ),
                 ),
+                const FormRendererView(elements: _demoElements),
               ],
             ),
           ),
