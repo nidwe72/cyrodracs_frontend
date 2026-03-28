@@ -1,7 +1,21 @@
 enum DataFormElementType {
   inputString,
+  inputNumber,
+  inputEmail,
+  inputPassword,
+  textarea,
   select,
+  multiSelect,
+  checkboxGroup,
+  radioGroup,
+  checkbox,
+  toggle,
   datePicker,
+  timePicker,
+  dateTimePicker,
+  dateRangePicker,
+  slider,
+  rating,
 }
 
 class DataFormElement {
@@ -9,11 +23,21 @@ class DataFormElement {
   final String label;
   final DataFormElementType type;
   final List<String> options;
+  final int cols;
+  final bool breakBefore;
+  final double? min;
+  final double? max;
+  final int? rows;
 
   const DataFormElement({
     required this.key,
     required this.label,
     required this.type,
     this.options = const [],
+    this.cols = 12,
+    this.breakBefore = false,
+    this.min,
+    this.max,
+    this.rows,
   });
 }
