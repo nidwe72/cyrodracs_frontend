@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:date_picker_plus/date_picker_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
 import 'package:http/http.dart' as http;
@@ -191,6 +192,7 @@ class _FormRendererViewState extends State<FormRendererView> {
           ),
         DataFormElementType.datePicker => _DateField(
             label: e.label,
+            initialValue: _values[e.key]?.toString(),
             onSaved: (v) => _values[e.key] = v,
           ),
         DataFormElementType.timePicker => _TimeField(
@@ -215,6 +217,11 @@ class _FormRendererViewState extends State<FormRendererView> {
             label: e.label,
             max: e.max?.toInt() ?? 5,
             onChanged: (v) => _values[e.key] = v,
+          ),
+        DataFormElementType.datePickerYearMonth => _YearMonthField(
+            label: e.label,
+            initialValue: _values[e.key]?.toString(),
+            onSaved: (v) => _values[e.key] = v,
           ),
       },
     );
@@ -289,16 +296,23 @@ class _PasswordFieldState extends State<_PasswordField> {
 
 class _DateField extends StatefulWidget {
   final String label;
+  final String? initialValue;
   final void Function(String?) onSaved;
 
-  const _DateField({required this.label, required this.onSaved});
+  const _DateField({required this.label, this.initialValue, required this.onSaved});
 
   @override
   State<_DateField> createState() => _DateFieldState();
 }
 
 class _DateFieldState extends State<_DateField> {
-  final _controller = TextEditingController();
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue ?? '');
+  }
 
   @override
   void dispose() {
@@ -307,11 +321,11 @@ class _DateFieldState extends State<_DateField> {
   }
 
   Future<void> _pick() async {
-    final picked = await showDatePicker(
+    final picked = await showDatePickerDialog(
       context: context,
       initialDate: DateTime.now(),
-      firstDate: DateTime(1900),
-      lastDate: DateTime(2100),
+      minDate: DateTime(1800),
+      maxDate: DateTime(2200),
     );
     if (picked != null) {
       setState(() {
@@ -319,6 +333,10 @@ class _DateFieldState extends State<_DateField> {
             '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
       });
     }
+  }
+
+  void _clear() {
+    setState(() => _controller.clear());
   }
 
   @override
@@ -330,7 +348,102 @@ class _DateFieldState extends State<_DateField> {
       decoration: InputDecoration(
         labelText: widget.label,
         border: const OutlineInputBorder(),
-        suffixIcon: const Icon(Icons.calendar_today, size: 18),
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_controller.text.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.clear, size: 18),
+                onPressed: _clear,
+              ),
+            const Icon(Icons.calendar_today, size: 18),
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+      onSaved: (_) => widget.onSaved(_controller.text.isEmpty ? null : _controller.text),
+    );
+  }
+}
+
+class _YearMonthField extends StatefulWidget {
+  final String label;
+  final String? initialValue;
+  final void Function(String?) onSaved;
+
+  const _YearMonthField({required this.label, this.initialValue, required this.onSaved});
+
+  @override
+  State<_YearMonthField> createState() => _YearMonthFieldState();
+}
+
+class _YearMonthFieldState extends State<_YearMonthField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick() async {
+    final picked = await showDialog<DateTime>(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: SizedBox(
+          width: 328,
+          height: 400,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: MonthPicker(
+              minDate: DateTime(1800),
+              maxDate: DateTime(2200),
+              onDateSelected: (value) => Navigator.pop(ctx, value),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (picked != null) {
+      setState(() {
+        _controller.text =
+            '${picked.year}-${picked.month.toString().padLeft(2, '0')}';
+      });
+    }
+  }
+
+  void _clear() {
+    setState(() => _controller.clear());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: _controller,
+      decoration: InputDecoration(
+        labelText: widget.label,
+        hintText: 'YYYY-MM',
+        border: const OutlineInputBorder(),
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_controller.text.isNotEmpty)
+              IconButton(
+                icon: const Icon(Icons.clear, size: 18),
+                onPressed: _clear,
+              ),
+            IconButton(
+              icon: const Icon(Icons.calendar_today, size: 18),
+              onPressed: _pick,
+            ),
+          ],
+        ),
       ),
       onSaved: (_) => widget.onSaved(_controller.text.isEmpty ? null : _controller.text),
     );

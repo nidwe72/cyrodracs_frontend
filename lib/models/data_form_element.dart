@@ -16,6 +16,7 @@ enum DataFormElementType {
   dateRangePicker,
   slider,
   rating,
+  datePickerYearMonth,
 }
 
 class DataFormElement {

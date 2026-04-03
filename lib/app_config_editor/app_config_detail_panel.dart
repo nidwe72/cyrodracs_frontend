@@ -20,10 +20,12 @@ const _kTypeValues = [
   'DATE_RANGE_PICKER',
   'SLIDER',
   'RATING',
+  'DATE_PICKER__YEAR_MONTH',
 ];
 
 const _kEntityValues = [
   'CAMERA_PRODUCER',
+  'CAMERA_LENS_MOUNT',
 ];
 
 /// Detail panel for the AppConfigEditorView.

@@ -10,7 +10,7 @@ import '../models/data_form_element.dart';
 /// Converts a SCREAMING_SNAKE_CASE backend type value to the camelCase name
 /// expected by [DataFormElementType.byName].
 String _toCamelCase(String screaming) {
-  final parts = screaming.toLowerCase().split('_');
+  final parts = screaming.toLowerCase().split('_').where((p) => p.isNotEmpty).toList();
   return parts.first +
       parts.skip(1).map((p) => p[0].toUpperCase() + p.substring(1)).join();
 }
@@ -51,6 +51,50 @@ DataForm? _buildDataFormForEntity(AppConfigNode root, String entityValue) {
   return null;
 }
 
+/// Describes an entity type shown in the App tree.
+class _EntityDef {
+  final String label;
+  final String apiPath;
+  final String entityTypeValue;
+  final List<_ColDef> columns;
+
+  const _EntityDef({
+    required this.label,
+    required this.apiPath,
+    required this.entityTypeValue,
+    required this.columns,
+  });
+}
+
+class _ColDef {
+  final String header;
+  final String key;
+  const _ColDef(this.header, this.key);
+}
+
+const _entityDefs = [
+  _EntityDef(
+    label: 'CameraProducers',
+    apiPath: '/api/camera-producers',
+    entityTypeValue: 'CAMERA_PRODUCER',
+    columns: [
+      _ColDef('ID', 'id'),
+      _ColDef('Name', 'name'),
+      _ColDef('Foundation', 'foundationYear'),
+      _ColDef('Shutdown', 'shutdownYear'),
+    ],
+  ),
+  _EntityDef(
+    label: 'CameraLensMounts',
+    apiPath: '/api/camera-lens-mounts',
+    entityTypeValue: 'CAMERA_LENS_MOUNT',
+    columns: [
+      _ColDef('ID', 'id'),
+      _ColDef('Name', 'name'),
+    ],
+  ),
+];
+
 class AppView extends StatefulWidget {
   const AppView({super.key});
 
@@ -63,8 +107,8 @@ enum _DetailMode { table, edit }
 class _AppViewState extends State<AppView> {
   final _service = AppConfigService();
 
-  String? _selectedNode;
-  List<Map<String, dynamic>> _cameraProducers = [];
+  _EntityDef? _selectedDef;
+  List<Map<String, dynamic>> _entities = [];
   bool _loading = false;
   String? _error;
 
@@ -73,20 +117,21 @@ class _AppViewState extends State<AppView> {
   DataForm? _editForm;
   Map<String, dynamic>? _editValues;
 
-  Future<void> _fetchCameraProducers() async {
+  Future<void> _fetchEntities(_EntityDef def) async {
     setState(() {
+      _selectedDef = def;
       _loading = true;
       _error = null;
       _mode = _DetailMode.table;
     });
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:8080/api/camera-producers'),
+        Uri.parse('http://localhost:8080${def.apiPath}'),
       );
       if (response.statusCode == 200) {
         final list = jsonDecode(response.body) as List<dynamic>;
         setState(() {
-          _cameraProducers = list.cast<Map<String, dynamic>>();
+          _entities = list.cast<Map<String, dynamic>>();
           _loading = false;
         });
       } else {
@@ -103,13 +148,14 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  Future<void> _deleteCameraProducer(int id) async {
+  Future<void> _deleteEntity(int id) async {
+    final def = _selectedDef!;
     try {
       final response = await http.delete(
-        Uri.parse('http://localhost:8080/api/camera-producers/$id'),
+        Uri.parse('http://localhost:8080${def.apiPath}/$id'),
       );
       if (response.statusCode == 200) {
-        _fetchCameraProducers();
+        _fetchEntities(def);
       } else {
         setState(() => _error = 'Delete failed: HTTP ${response.statusCode}');
       }
@@ -118,39 +164,29 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  Future<void> _editCameraProducer(int entityId) async {
+  Future<void> _editEntity(int entityId) async {
+    final def = _selectedDef!;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      // Find the DataForm configured for CAMERA_PRODUCER
       final root = await _service.fetchTree();
       if (root == null) {
-        setState(() {
-          _error = 'AppConfig not loaded';
-          _loading = false;
-        });
+        setState(() { _error = 'AppConfig not loaded'; _loading = false; });
         return;
       }
-      final form = _buildDataFormForEntity(root, 'CAMERA_PRODUCER');
+      final form = _buildDataFormForEntity(root, def.entityTypeValue);
       if (form == null) {
-        setState(() {
-          _error = 'No DataForm configured for CAMERA_PRODUCER';
-          _loading = false;
-        });
+        setState(() { _error = 'No DataForm configured for ${def.entityTypeValue}'; _loading = false; });
         return;
       }
 
-      // Load entity values
       final response = await http.get(
         Uri.parse('http://localhost:8080/api/data-form-data/${form.code}/$entityId'),
       );
       if (response.statusCode != 200) {
-        setState(() {
-          _error = 'Load failed: HTTP ${response.statusCode}';
-          _loading = false;
-        });
+        setState(() { _error = 'Load failed: HTTP ${response.statusCode}'; _loading = false; });
         return;
       }
       final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -164,14 +200,12 @@ class _AppViewState extends State<AppView> {
         _loading = false;
       });
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      setState(() { _error = e.toString(); _loading = false; });
     }
   }
 
-  Future<void> _addCameraProducer() async {
+  Future<void> _addEntity() async {
+    final def = _selectedDef!;
     setState(() {
       _loading = true;
       _error = null;
@@ -182,9 +216,9 @@ class _AppViewState extends State<AppView> {
         setState(() { _error = 'AppConfig not loaded'; _loading = false; });
         return;
       }
-      final form = _buildDataFormForEntity(root, 'CAMERA_PRODUCER');
+      final form = _buildDataFormForEntity(root, def.entityTypeValue);
       if (form == null) {
-        setState(() { _error = 'No DataForm configured for CAMERA_PRODUCER'; _loading = false; });
+        setState(() { _error = 'No DataForm configured for ${def.entityTypeValue}'; _loading = false; });
         return;
       }
       setState(() {
@@ -199,11 +233,8 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  void _onNodeDoubleClick(String node) {
-    setState(() => _selectedNode = node);
-    if (node == 'CameraProducers') {
-      _fetchCameraProducers();
-    }
+  void _onNodeDoubleClick(_EntityDef def) {
+    _fetchEntities(def);
   }
 
   @override
@@ -230,18 +261,16 @@ class _AppViewState extends State<AppView> {
   Widget _buildTree() {
     return ListView(
       padding: const EdgeInsets.all(8),
-      children: [
-        _TreeNode(
-          label: 'CameraProducers',
-          selected: _selectedNode == 'CameraProducers',
-          onDoubleTap: () => _onNodeDoubleClick('CameraProducers'),
-        ),
-      ],
+      children: _entityDefs.map((def) => _TreeNode(
+        label: def.label,
+        selected: _selectedDef == def,
+        onDoubleTap: () => _onNodeDoubleClick(def),
+      )).toList(),
     );
   }
 
   Widget _buildDetailPanel() {
-    if (_selectedNode == null) {
+    if (_selectedDef == null) {
       return const Center(
         child: Text(
           'Double-click a node to view details',
@@ -262,10 +291,11 @@ class _AppViewState extends State<AppView> {
       return _buildEditView();
     }
 
-    return _buildCameraProducerTable();
+    return _buildEntityTable();
   }
 
   Widget _buildEditView() {
+    final def = _selectedDef!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -277,13 +307,13 @@ class _AppViewState extends State<AppView> {
               IconButton(
                 icon: const Icon(Icons.arrow_back, size: 18),
                 tooltip: 'Back to list',
-                onPressed: _fetchCameraProducers,
+                onPressed: () => _fetchEntities(def),
               ),
               const SizedBox(width: 8),
               Text(
                   _editEntityId != null
-                      ? 'Edit CameraProducer (id=$_editEntityId)'
-                      : 'Add CameraProducer',
+                      ? 'Edit ${def.label} (id=$_editEntityId)'
+                      : 'Add ${def.label}',
                   style: Theme.of(context).textTheme.titleSmall),
             ],
           ),
@@ -291,18 +321,19 @@ class _AppViewState extends State<AppView> {
         const Divider(height: 1),
         Expanded(
           child: FormRendererView(
-            key: ValueKey('edit-${_editEntityId ?? 'new'}'),
+            key: ValueKey('edit-${def.label}-${_editEntityId ?? 'new'}'),
             form: _editForm!,
             entityId: _editEntityId,
             initialValues: _editValues,
-            onSaved: _fetchCameraProducers,
+            onSaved: () => _fetchEntities(def),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildCameraProducerTable() {
+  Widget _buildEntityTable() {
+    final def = _selectedDef!;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -310,52 +341,48 @@ class _AppViewState extends State<AppView> {
         children: [
           Row(
             children: [
-              Text('CameraProducers',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(def.label, style: Theme.of(context).textTheme.titleMedium),
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.add, size: 18),
                 tooltip: 'Add',
-                onPressed: _addCameraProducer,
+                onPressed: _addEntity,
               ),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 18),
                 tooltip: 'Reload',
-                onPressed: _fetchCameraProducers,
+                onPressed: () => _fetchEntities(def),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          if (_cameraProducers.isEmpty)
-            const Text('No camera producers found.',
-                style: TextStyle(color: Colors.grey))
+          if (_entities.isEmpty)
+            Text('No ${def.label.toLowerCase()} found.',
+                style: const TextStyle(color: Colors.grey))
           else
             SizedBox(
               width: double.infinity,
               child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('ID')),
-                  DataColumn(label: Text('Name')),
-                  DataColumn(label: Text('Actions')),
+                columns: [
+                  ...def.columns.map((c) => DataColumn(label: Text(c.header))),
+                  const DataColumn(label: Text('Actions')),
                 ],
-                rows: _cameraProducers.map((cp) {
-                  final id = (cp['id'] as num).toInt();
+                rows: _entities.map((e) {
+                  final id = (e['id'] as num).toInt();
                   return DataRow(cells: [
-                    DataCell(Text('$id')),
-                    DataCell(Text('${cp['name'] ?? ''}')),
+                    ...def.columns.map((c) => DataCell(Text('${e[c.key] ?? ''}'))),
                     DataCell(Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
                           icon: const Icon(Icons.edit, size: 18),
                           tooltip: 'Edit',
-                          onPressed: () => _editCameraProducer(id),
+                          onPressed: () => _editEntity(id),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.delete, size: 18,
-                              color: Colors.red),
+                          icon: const Icon(Icons.delete, size: 18, color: Colors.red),
                           tooltip: 'Delete',
-                          onPressed: () => _confirmDelete(id, cp['name']),
+                          onPressed: () => _confirmDelete(id, e['name']),
                         ),
                       ],
                     )),
@@ -373,7 +400,7 @@ class _AppViewState extends State<AppView> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Confirm delete'),
-        content: Text('Delete CameraProducer "${name ?? id}"?'),
+        content: Text('Delete "${name ?? id}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -388,7 +415,7 @@ class _AppViewState extends State<AppView> {
       ),
     );
     if (confirmed == true) {
-      _deleteCameraProducer(id);
+      _deleteEntity(id);
     }
   }
 }

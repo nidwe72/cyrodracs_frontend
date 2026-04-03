@@ -8,7 +8,7 @@ import '../models/data_form_element.dart';
 /// Converts a SCREAMING_SNAKE_CASE backend type value to the camelCase name
 /// expected by [DataFormElementType.byName].
 String _toCamelCase(String screaming) {
-  final parts = screaming.toLowerCase().split('_');
+  final parts = screaming.toLowerCase().split('_').where((p) => p.isNotEmpty).toList();
   return parts.first +
       parts.skip(1).map((p) => p[0].toUpperCase() + p.substring(1)).join();
 }
