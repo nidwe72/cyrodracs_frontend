@@ -99,6 +99,37 @@ class AppConfigService {
         jsonDecode(response.body) as Map<String, dynamic>);
   }
 
+  /// Updates a DataForm's code and/or entity enum.
+  /// If the DataFormEntityType child node does not yet exist it is created.
+  Future<AppConfigNode?> updateDataForm({
+    required int formId,
+    required String formCode,
+    required int? entityNodeId,
+    String? newCode,
+    String? newEntityValue,
+  }) async {
+    AppConfigNode? tree;
+
+    if (newCode != null) {
+      tree = await updateNode(formId, code: newCode);
+    }
+
+    if (newEntityValue != null) {
+      if (entityNodeId != null) {
+        tree = await updateNode(entityNodeId, enumValue: newEntityValue);
+      } else {
+        tree = await addNode(
+          parentObjectId: formId,
+          typeCode: 'DataFormEntityType',
+          code: '${newCode ?? formCode}_entity',
+          enumValue: newEntityValue,
+        );
+      }
+    }
+
+    return tree;
+  }
+
   /// Updates a DataFormElement's code and/or type enum.
   /// If the DataFormElementType child node does not yet exist it is created.
   Future<AppConfigNode?> updateDataFormElement({

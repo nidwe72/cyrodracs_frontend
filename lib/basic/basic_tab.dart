@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../data_form_renderer/data_form_renderer_view.dart';
 import '../models/data_form.dart';
 import 'form_renderer_view.dart';
 
@@ -40,7 +41,7 @@ class _BasicTabState extends State<BasicTab> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       initialIndex: 0,
       child: Column(
         children: [
@@ -49,6 +50,7 @@ class _BasicTabState extends State<BasicTab> {
               constraints: const BoxConstraints(maxWidth: 960),
               child: const TabBar(
                 tabs: [
+                  Tab(text: 'App playground'),
                   Tab(text: 'Form Renderer'),
                   Tab(text: 'Hello World'),
                 ],
@@ -58,6 +60,7 @@ class _BasicTabState extends State<BasicTab> {
           Expanded(
             child: TabBarView(
               children: [
+                const DataFormRendererView(),
                 _buildFormTab(),
                 Center(
                   child: Column(

@@ -1,12 +1,23 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
+import 'package:http/http.dart' as http;
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
 
 class FormRendererView extends StatefulWidget {
   final DataForm form;
+  final int? entityId;
+  final Map<String, dynamic>? initialValues;
+  final VoidCallback? onSaved;
 
-  const FormRendererView({super.key, required this.form});
+  const FormRendererView({
+    super.key,
+    required this.form,
+    this.entityId,
+    this.initialValues,
+    this.onSaved,
+  });
 
   @override
   State<FormRendererView> createState() => _FormRendererViewState();
@@ -20,31 +31,77 @@ class _FormRendererViewState extends State<FormRendererView> {
   @override
   void initState() {
     super.initState();
+    final initial = widget.initialValues;
     for (final e in widget.form.elements) {
-      _values[e.key] = switch (e.type) {
-        DataFormElementType.checkbox || DataFormElementType.toggle => false,
-        DataFormElementType.slider => e.min ?? 0.0,
-        DataFormElementType.rating => 0,
-        DataFormElementType.checkboxGroup ||
-        DataFormElementType.multiSelect =>
-          <String>[],
-        _ => null,
-      };
+      if (initial != null && initial.containsKey(e.key)) {
+        _values[e.key] = initial[e.key];
+      } else {
+        _values[e.key] = switch (e.type) {
+          DataFormElementType.checkbox || DataFormElementType.toggle => false,
+          DataFormElementType.slider => e.min ?? 0.0,
+          DataFormElementType.rating => 0,
+          DataFormElementType.checkboxGroup ||
+          DataFormElementType.multiSelect =>
+            <String>[],
+          _ => null,
+        };
+      }
     }
   }
 
   void _onSubmit() {
     if (_formKey.currentState!.validate()) {
       _formKey.currentState!.save();
-      setState(() {
-        _submitResult = _values.entries.map((e) {
-          final v = e.value;
-          if (v == null) return '${e.key}: -';
-          if (v is List) return '${e.key}: ${v.isEmpty ? '-' : v.join(', ')}';
-          if (v is double) return '${e.key}: ${v.toStringAsFixed(1)}';
-          return '${e.key}: $v';
-        }).join('\n');
-      });
+      if (widget.form.hasEntity) {
+        _persistEntity();
+      } else {
+        _showValues();
+      }
+    }
+  }
+
+  void _showValues() {
+    setState(() {
+      _submitResult = _values.entries.map((e) {
+        final v = e.value;
+        if (v == null) return '${e.key}: -';
+        if (v is List) return '${e.key}: ${v.isEmpty ? '-' : v.join(', ')}';
+        if (v is double) return '${e.key}: ${v.toStringAsFixed(1)}';
+        return '${e.key}: $v';
+      }).join('\n');
+    });
+  }
+
+  Future<void> _persistEntity() async {
+    // Only send values for elements that belong to this form
+    final formKeys = widget.form.elements.map((e) => e.key).toSet();
+    final filteredValues = Map<String, dynamic>.fromEntries(
+      _values.entries.where((e) => formKeys.contains(e.key)),
+    );
+
+    final body = <String, dynamic>{
+      'dataFormCode': widget.form.code,
+      'values': filteredValues,
+      if (widget.entityId != null) 'entityId': widget.entityId,
+    };
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost:8080/api/data-form-data'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+      if (response.statusCode == 200) {
+        final result = jsonDecode(response.body) as Map<String, dynamic>;
+        setState(() {
+          _submitResult = 'Saved entity (id=${result['entityId']})\n'
+              '${filteredValues.entries.map((e) => '${e.key}: ${e.value ?? '-'}').join('\n')}';
+        });
+        widget.onSaved?.call();
+      } else {
+        setState(() => _submitResult = 'Error: HTTP ${response.statusCode}\n${response.body}');
+      }
+    } catch (e) {
+      setState(() => _submitResult = 'Error: $e');
     }
   }
 
@@ -76,6 +133,7 @@ class _FormRendererViewState extends State<FormRendererView> {
       padding: const EdgeInsets.only(bottom: 16),
       child: switch (e.type) {
         DataFormElementType.inputString => TextFormField(
+            initialValue: _values[e.key]?.toString(),
             decoration: InputDecoration(labelText: e.label, border: const OutlineInputBorder()),
             onSaved: (v) => _values[e.key] = v,
           ),

@@ -22,6 +22,10 @@ const _kTypeValues = [
   'RATING',
 ];
 
+const _kEntityValues = [
+  'CAMERA_PRODUCER',
+];
+
 /// Detail panel for the AppConfigEditorView.
 ///
 /// * No node selected  → placeholder hint.
@@ -52,6 +56,7 @@ class AppConfigDetailPanel extends StatefulWidget {
 class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   late TextEditingController _codeCtrl;
   String _selectedType = _kTypeValues.first;
+  String? _selectedEntity;
   bool _loading = false;
   String? _error;
 
@@ -62,6 +67,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _codeCtrl = TextEditingController(
         text: (n != null && n.isInstance) ? n.label : '');
     _selectedType = n?.typeValue ?? _kTypeValues.first;
+    _selectedEntity = n?.entityValue;
   }
 
   @override
@@ -173,6 +179,10 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 16),
           _codeField(),
+          if (n.hasEntityField) ...[
+            const SizedBox(height: 12),
+            _entityDropdown(),
+          ],
           if (n.hasTypeField) ...[
             const SizedBox(height: 12),
             _typeDropdown(),
@@ -209,10 +219,19 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     }
     final codeChanged = code != n.label;
     final typeChanged = n.hasTypeField && _selectedType != (n.typeValue ?? '');
+    final entityChanged = n.hasEntityField && _selectedEntity != n.entityValue;
 
-    if (!codeChanged && !typeChanged) return;
+    if (!codeChanged && !typeChanged && !entityChanged) return;
 
-    if (n.hasTypeField) {
+    if (n.hasEntityField) {
+      await _run(() => widget.service.updateDataForm(
+            formId: n.id!,
+            formCode: n.label,
+            entityNodeId: n.entityNodeId,
+            newCode: codeChanged ? code : null,
+            newEntityValue: entityChanged ? _selectedEntity : null,
+          ));
+    } else if (n.hasTypeField) {
       await _run(() => widget.service.updateDataFormElement(
             elementId: n.id!,
             elementCode: n.label,
@@ -277,6 +296,24 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           isDense: true,
         ),
       );
+
+  Widget _entityDropdown() {
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none)')),
+      ..._kEntityValues
+          .map((v) => DropdownMenuItem(value: v, child: Text(v))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: _kEntityValues.contains(_selectedEntity) ? _selectedEntity : null,
+      decoration: const InputDecoration(
+        labelText: 'Entity',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedEntity = v),
+    );
+  }
 
   Widget _typeDropdown() {
     final value = _kTypeValues.contains(_selectedType)

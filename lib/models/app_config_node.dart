@@ -18,6 +18,8 @@ class AppConfigNode {
   final String? typeCode;
   final String? typeValue;   // rendered enum value on DataFormElement
   final int? typeNodeId;     // DB id of the DataFormElementType child object
+  final String? entityValue; // rendered enum value on DataForm (DataFormEntityType)
+  final int? entityNodeId;   // DB id of the DataFormEntityType child object
 
   // collection-node fields
   final String? childTypeCode; // typeCode of children, e.g. "DataForm"
@@ -33,6 +35,8 @@ class AppConfigNode {
     this.typeCode,
     this.typeValue,
     this.typeNodeId,
+    this.entityValue,
+    this.entityNodeId,
     this.childTypeCode,
     this.parentId,
   });
@@ -45,6 +49,9 @@ class AppConfigNode {
 
   /// True when this instance node exposes a "type" enum field (DataFormElement).
   bool get hasTypeField => typeCode == 'DataFormElement';
+
+  /// True when this instance node exposes an "entity" enum field (DataForm).
+  bool get hasEntityField => typeCode == 'DataForm';
 
   // ---------------------------------------------------------------------------
   // JSON parsing
@@ -85,6 +92,8 @@ class AppConfigNode {
         kind: AppConfigNodeKind.instance,
         id: formId,
         typeCode: 'DataForm',
+        entityValue: form['entity'] as String?,
+        entityNodeId: (form['entityNodeId'] as num?)?.toInt(),
         children: [
           AppConfigNode(
             label: 'elements',

@@ -33,7 +33,11 @@ DataForm _buildDataForm(AppConfigNode formNode) {
       }
     }
   }
-  return DataForm(elements: elements);
+  return DataForm(
+    code: formNode.label,
+    entityValue: formNode.entityValue,
+    elements: elements,
+  );
 }
 
 class DataFormRendererView extends StatefulWidget {
