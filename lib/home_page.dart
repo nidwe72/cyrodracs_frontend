@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'admin/admin_tab.dart';
 import 'basic/basic_tab.dart';
+import 'app_config_editor/app_config_editor_view.dart';
+import 'data_form_renderer/data_form_renderer_view.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -27,8 +29,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
-      initialIndex: 2,
+      length: 5,
+      initialIndex: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Cyrodracs'),
@@ -43,6 +45,8 @@ class _HomePageState extends State<HomePage> {
                     Tab(text: 'App'),
                     Tab(text: 'Admin'),
                     Tab(text: 'Basic'),
+                    Tab(text: 'Config editor'),
+                    Tab(text: 'DataForm renderer'),
                   ],
                 ),
               ),
@@ -56,6 +60,8 @@ class _HomePageState extends State<HomePage> {
                     helloMessage: _helloMessage,
                     onHelloPressed: _onHelloPressed,
                   ),
+                  const AppConfigEditorView(),
+                  const DataFormRendererView(),
                 ],
               ),
             ),
