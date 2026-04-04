@@ -7,12 +7,14 @@ class BindingCompletion {
   final String javaType;
   final bool leaf;
   final String? suggestedElementType;
+  final String? referencedEntityType;
 
   const BindingCompletion({
     required this.segment,
     required this.javaType,
     required this.leaf,
     this.suggestedElementType,
+    this.referencedEntityType,
   });
 
   factory BindingCompletion.fromJson(Map<String, dynamic> json) {
@@ -21,6 +23,21 @@ class BindingCompletion {
       javaType: json['javaType'] as String,
       leaf: json['leaf'] as bool,
       suggestedElementType: json['suggestedElementType'] as String?,
+      referencedEntityType: json['referencedEntityType'] as String?,
+    );
+  }
+}
+
+class EntityOption {
+  final int id;
+  final String label;
+
+  const EntityOption({required this.id, required this.label});
+
+  factory EntityOption.fromJson(Map<String, dynamic> json) {
+    return EntityOption(
+      id: (json['id'] as num).toInt(),
+      label: json['label'] as String,
     );
   }
 }
@@ -47,6 +64,7 @@ class BindingProposalResponse {
 class AppConfigService {
   static const _base = 'http://localhost:8080/api/app-config';
   static const _bindingBase = 'http://localhost:8080/api/data-binding';
+  static const _entitySelectBase = 'http://localhost:8080/api/entity-select';
 
   // ---------------------------------------------------------------------------
   // Read
@@ -222,16 +240,20 @@ class AppConfigService {
         jsonDecode(response.body) as Map<String, dynamic>);
   }
 
-  /// Updates a DataFormElement's code, type enum, and/or dataBinding.
-  /// Creates the DataBinding child node if it does not yet exist.
+  /// Updates a DataFormElement's code, type enum, dataBinding, and entity refs.
+  /// Creates child nodes if they do not yet exist.
   Future<AppConfigNode?> updateDataFormElementFull({
     required int elementId,
     required String elementCode,
     required int? typeNodeId,
     required int? dataBindingNodeId,
+    required int? entityProviderRefNodeId,
+    required int? entityRendererRefNodeId,
     String? newCode,
     String? newTypeValue,
     String? newDataBinding,
+    String? newEntityProviderRef,
+    String? newEntityRendererRef,
   }) async {
     AppConfigNode? tree;
 
@@ -260,6 +282,131 @@ class AppConfigService {
           parentObjectId: elementId,
           typeCode: 'DataBinding',
           code: newDataBinding,
+        );
+      }
+    }
+
+    if (newEntityProviderRef != null) {
+      if (entityProviderRefNodeId != null) {
+        tree = await updateNode(entityProviderRefNodeId, code: newEntityProviderRef);
+      } else {
+        tree = await addNode(
+          parentObjectId: elementId,
+          typeCode: 'EntityProviderRef',
+          code: newEntityProviderRef,
+        );
+      }
+    }
+
+    if (newEntityRendererRef != null) {
+      if (entityRendererRefNodeId != null) {
+        tree = await updateNode(entityRendererRefNodeId, code: newEntityRendererRef);
+      } else {
+        tree = await addNode(
+          parentObjectId: elementId,
+          typeCode: 'EntityRendererRef',
+          code: newEntityRendererRef,
+        );
+      }
+    }
+
+    return tree;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Entity Select Options
+  // ---------------------------------------------------------------------------
+
+  Future<List<EntityOption>> fetchEntityOptions(
+      String providerCode, String rendererCode) async {
+    final uri = Uri.parse('$_entitySelectBase/options').replace(
+        queryParameters: {'provider': providerCode, 'renderer': rendererCode});
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw Exception(
+          'Failed to fetch entity options: HTTP ${response.statusCode}');
+    }
+    final list = jsonDecode(response.body) as List<dynamic>;
+    return list
+        .map((e) => EntityOption.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  // ---------------------------------------------------------------------------
+  // EntityProvider mutations
+  // ---------------------------------------------------------------------------
+
+  /// Updates an EntityProvider's code and/or entityType.
+  Future<AppConfigNode?> updateEntityProvider({
+    required int providerId,
+    required String providerCode,
+    required int? entityTypeNodeId,
+    String? newCode,
+    String? newEntityTypeValue,
+  }) async {
+    AppConfigNode? tree;
+
+    if (newCode != null) {
+      tree = await updateNode(providerId, code: newCode);
+    }
+
+    if (newEntityTypeValue != null) {
+      if (entityTypeNodeId != null) {
+        tree = await updateNode(entityTypeNodeId, enumValue: newEntityTypeValue);
+      } else {
+        tree = await addNode(
+          parentObjectId: providerId,
+          typeCode: 'EntityProviderEntityType',
+          code: '${newCode ?? providerCode}_entityType',
+          enumValue: newEntityTypeValue,
+        );
+      }
+    }
+
+    return tree;
+  }
+
+  // ---------------------------------------------------------------------------
+  // EntityRenderer mutations
+  // ---------------------------------------------------------------------------
+
+  /// Updates an EntityRenderer's code, entityType, and/or template.
+  Future<AppConfigNode?> updateEntityRenderer({
+    required int rendererId,
+    required String rendererCode,
+    required int? entityTypeNodeId,
+    required int? templateNodeId,
+    String? newCode,
+    String? newEntityTypeValue,
+    String? newTemplate,
+  }) async {
+    AppConfigNode? tree;
+
+    if (newCode != null) {
+      tree = await updateNode(rendererId, code: newCode);
+    }
+
+    if (newEntityTypeValue != null) {
+      if (entityTypeNodeId != null) {
+        tree = await updateNode(entityTypeNodeId, enumValue: newEntityTypeValue);
+      } else {
+        tree = await addNode(
+          parentObjectId: rendererId,
+          typeCode: 'EntityRendererEntityType',
+          code: '${newCode ?? rendererCode}_entityType',
+          enumValue: newEntityTypeValue,
+        );
+      }
+    }
+
+    if (newTemplate != null) {
+      if (templateNodeId != null) {
+        tree = await updateNode(templateNodeId, code: newTemplate);
+      } else {
+        tree = await addNode(
+          parentObjectId: rendererId,
+          typeCode: 'EntityRendererTemplate',
+          code: newTemplate,
         );
       }
     }

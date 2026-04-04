@@ -35,6 +35,8 @@ DataForm? _buildDataFormForEntity(AppConfigNode root, String entityValue) {
                   key: elem.label,
                   label: elem.label,
                   type: type,
+                  entityProviderRef: elem.entityProviderRef,
+                  entityRendererRef: elem.entityRendererRef,
                 ));
               }
             }

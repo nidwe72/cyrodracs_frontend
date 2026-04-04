@@ -23,6 +23,7 @@ const _kTypeValues = [
   'SLIDER',
   'RATING',
   'DATE_PICKER__YEAR_MONTH',
+  'ENTITY_SELECT',
 ];
 
 const _kEntityValues = [
@@ -63,8 +64,11 @@ class AppConfigDetailPanel extends StatefulWidget {
 class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   late TextEditingController _codeCtrl;
   late TextEditingController _dataBindingCtrl;
+  late TextEditingController _templateCtrl;
   String _selectedType = _kTypeValues.first;
   String? _selectedEntity;
+  String? _selectedEntityProviderRef;
+  String? _selectedEntityRendererRef;
   bool _loading = false;
   String? _error;
 
@@ -76,6 +80,12 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   String? _parentEntityType;
   final FocusNode _dataBindingFocus = FocusNode();
 
+  // Template auto-completion state (for EntityRenderer)
+  List<BindingCompletion> _templateCompletions = [];
+  bool _showTemplateCompletions = false;
+  int _templateCompletionIndex = -1;
+  final FocusNode _templateFocus = FocusNode();
+
   @override
   void initState() {
     super.initState();
@@ -84,14 +94,22 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         text: (n != null && n.isInstance) ? n.label : '');
     _dataBindingCtrl = TextEditingController(
         text: n?.dataBinding ?? '');
+    _templateCtrl = TextEditingController(
+        text: n?.template ?? '');
     _selectedType = n?.typeValue ?? _kTypeValues.first;
     _selectedEntity = n?.entityValue;
+    _selectedEntityProviderRef = n?.entityProviderRef;
+    _selectedEntityRendererRef = n?.entityRendererRef;
     _parentEntityType = _findParentEntityType();
     final shouldFetchCompletions = _parentEntityType != null && n != null
         && (n.hasDataBindingField
             || (n.isCollection && n.childTypeCode == 'DataFormElement'));
     if (shouldFetchCompletions) {
       _fetchCompletions();
+    }
+    // Fetch template completions for EntityRenderer nodes
+    if (n != null && n.isEntityRenderer && n.entityValue != null) {
+      _fetchTemplateCompletions(n.entityValue!);
     }
   }
 
@@ -100,6 +118,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _codeCtrl.dispose();
     _dataBindingCtrl.dispose();
     _dataBindingFocus.dispose();
+    _templateCtrl.dispose();
+    _templateFocus.dispose();
     super.dispose();
   }
 
@@ -153,6 +173,47 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     }
   }
 
+  Future<void> _fetchTemplateCompletions(String entityType) async {
+    try {
+      final response = await widget.service
+          .fetchBindingProposals(entityType);
+      if (!mounted) return;
+      setState(() {
+        _templateCompletions = response.completions;
+      });
+    } catch (_) {}
+  }
+
+  /// Collects available EntityProvider codes from the root tree.
+  List<String> _entityProviderCodes() {
+    final root = widget.root;
+    if (root == null) return [];
+    final codes = <String>[];
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'entityProviders') {
+        for (final prov in child.children) {
+          codes.add(prov.label);
+        }
+      }
+    }
+    return codes;
+  }
+
+  /// Collects available EntityRenderer codes from the root tree.
+  List<String> _entityRendererCodes() {
+    final root = widget.root;
+    if (root == null) return [];
+    final codes = <String>[];
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'entityRenderers') {
+        for (final ren in child.children) {
+          codes.add(ren.label);
+        }
+      }
+    }
+    return codes;
+  }
+
   // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
@@ -194,17 +255,28 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
 
   Widget _buildAddForm(AppConfigNode col) {
     final isElement = col.childTypeCode == 'DataFormElement';
+    final isProvider = col.childTypeCode == 'EntityProvider';
+    final isRenderer = col.childTypeCode == 'EntityRenderer';
     final showBinding = isElement && _parentEntityType != null;
+    final showEntitySelectRefs = isElement && _selectedType == 'ENTITY_SELECT';
+
+    String title;
+    if (isElement) {
+      title = 'Add DataFormElement';
+    } else if (isProvider) {
+      title = 'Add EntityProvider';
+    } else if (isRenderer) {
+      title = 'Add EntityRenderer';
+    } else {
+      title = 'Add DataForm';
+    }
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            isElement ? 'Add DataFormElement' : 'Add DataForm',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 16),
           _codeField(),
           if (isElement) ...[
@@ -214,6 +286,16 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           if (showBinding) ...[
             const SizedBox(height: 12),
             _dataBindingField(),
+          ],
+          if (showEntitySelectRefs) ...[
+            const SizedBox(height: 12),
+            _entityProviderRefDropdown(),
+            const SizedBox(height: 12),
+            _entityRendererRefDropdown(),
+          ],
+          if (isProvider || isRenderer) ...[
+            const SizedBox(height: 12),
+            _entityDropdown(),
           ],
           const SizedBox(height: 16),
           _errorText(),
@@ -251,6 +333,91 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             );
           }
         }
+        // Persist entityProviderRef and entityRendererRef for ENTITY_SELECT
+        if (_selectedType == 'ENTITY_SELECT' && tree != null) {
+          final newElem = tree.findDataFormElement(col.parentId!, code);
+          if (newElem?.id != null) {
+            if (_selectedEntityProviderRef != null && _selectedEntityProviderRef!.isNotEmpty) {
+              tree = await widget.service.addNode(
+                parentObjectId: newElem!.id,
+                typeCode: 'EntityProviderRef',
+                code: _selectedEntityProviderRef!,
+              );
+            }
+            // Re-fetch to get updated tree for the second child node
+            final elemForRenderer = tree?.findDataFormElement(col.parentId!, code);
+            if (_selectedEntityRendererRef != null && _selectedEntityRendererRef!.isNotEmpty
+                && (elemForRenderer?.id ?? newElem?.id) != null) {
+              tree = await widget.service.addNode(
+                parentObjectId: (elemForRenderer?.id ?? newElem!.id),
+                typeCode: 'EntityRendererRef',
+                code: _selectedEntityRendererRef!,
+              );
+            }
+          }
+        }
+        return tree;
+      });
+    } else if (col.childTypeCode == 'EntityProvider') {
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.addNode(
+          parentObjectId: col.parentId,
+          typeCode: 'EntityProvider',
+          code: code,
+        );
+        // Set entityType if selected
+        if (_selectedEntity != null && tree != null) {
+          // Find the newly created provider to get its ID
+          tree = await widget.service.fetchTree();
+          // Re-fetch and find the new provider
+          if (tree != null) {
+            for (final child in tree.children) {
+              if (child.isCollection && child.label == 'entityProviders') {
+                for (final prov in child.children) {
+                  if (prov.label == code && prov.id != null) {
+                    tree = await widget.service.addNode(
+                      parentObjectId: prov.id,
+                      typeCode: 'EntityProviderEntityType',
+                      code: '${code}_entityType',
+                      enumValue: _selectedEntity,
+                    );
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        return tree;
+      });
+    } else if (col.childTypeCode == 'EntityRenderer') {
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.addNode(
+          parentObjectId: col.parentId,
+          typeCode: 'EntityRenderer',
+          code: code,
+        );
+        // Set entityType if selected
+        if (_selectedEntity != null && tree != null) {
+          tree = await widget.service.fetchTree();
+          if (tree != null) {
+            for (final child in tree.children) {
+              if (child.isCollection && child.label == 'entityRenderers') {
+                for (final ren in child.children) {
+                  if (ren.label == code && ren.id != null) {
+                    tree = await widget.service.addNode(
+                      parentObjectId: ren.id,
+                      typeCode: 'EntityRendererEntityType',
+                      code: '${code}_entityType',
+                      enumValue: _selectedEntity,
+                    );
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
         return tree;
       });
     } else {
@@ -267,6 +434,9 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   // ---------------------------------------------------------------------------
 
   Widget _buildEditForm(AppConfigNode n) {
+    final showEntitySelectRefs = n.hasEntitySelectFields
+        && _selectedType == 'ENTITY_SELECT';
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -276,7 +446,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 16),
           _codeField(),
-          if (n.hasEntityField) ...[
+          if (n.hasEntityField || n.isEntityProvider || n.isEntityRenderer) ...[
             const SizedBox(height: 12),
             _entityDropdown(),
           ],
@@ -287,6 +457,16 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           if (n.hasDataBindingField && _parentEntityType != null) ...[
             const SizedBox(height: 12),
             _dataBindingField(),
+          ],
+          if (showEntitySelectRefs) ...[
+            const SizedBox(height: 12),
+            _entityProviderRefDropdown(),
+            const SizedBox(height: 12),
+            _entityRendererRefDropdown(),
+          ],
+          if (n.hasTemplateField) ...[
+            const SizedBox(height: 12),
+            _templateField(),
           ],
           const SizedBox(height: 16),
           _errorText(),
@@ -320,16 +500,43 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     }
     final codeChanged = code != n.label;
     final typeChanged = n.hasTypeField && _selectedType != (n.typeValue ?? '');
-    final entityChanged = n.hasEntityField && _selectedEntity != n.entityValue;
+    final entityChanged = (n.hasEntityField || n.isEntityProvider || n.isEntityRenderer)
+        && _selectedEntity != n.entityValue;
     final dataBindingText = _dataBindingCtrl.text.trim();
     final dataBindingChanged = n.hasDataBindingField
         && dataBindingText != (n.dataBinding ?? '');
+    final providerRefChanged = n.hasEntitySelectFields
+        && _selectedEntityProviderRef != (n.entityProviderRef ?? '');
+    final rendererRefChanged = n.hasEntitySelectFields
+        && _selectedEntityRendererRef != (n.entityRendererRef ?? '');
+    final templateText = _templateCtrl.text;
+    final templateChanged = n.hasTemplateField
+        && templateText != (n.template ?? '');
 
-    if (!codeChanged && !typeChanged && !entityChanged && !dataBindingChanged) {
+    if (!codeChanged && !typeChanged && !entityChanged && !dataBindingChanged
+        && !providerRefChanged && !rendererRefChanged && !templateChanged) {
       return;
     }
 
-    if (n.hasEntityField) {
+    if (n.isEntityProvider) {
+      await _run(() => widget.service.updateEntityProvider(
+            providerId: n.id!,
+            providerCode: n.label,
+            entityTypeNodeId: n.entityNodeId,
+            newCode: codeChanged ? code : null,
+            newEntityTypeValue: entityChanged ? _selectedEntity : null,
+          ));
+    } else if (n.isEntityRenderer) {
+      await _run(() => widget.service.updateEntityRenderer(
+            rendererId: n.id!,
+            rendererCode: n.label,
+            entityTypeNodeId: n.entityNodeId,
+            templateNodeId: n.templateNodeId,
+            newCode: codeChanged ? code : null,
+            newEntityTypeValue: entityChanged ? _selectedEntity : null,
+            newTemplate: templateChanged ? templateText : null,
+          ));
+    } else if (n.hasEntityField) {
       await _run(() => widget.service.updateDataForm(
             formId: n.id!,
             formCode: n.label,
@@ -343,10 +550,18 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             elementCode: n.label,
             typeNodeId: n.typeNodeId,
             dataBindingNodeId: n.dataBindingNodeId,
+            entityProviderRefNodeId: n.entityProviderRefNodeId,
+            entityRendererRefNodeId: n.entityRendererRefNodeId,
             newCode: codeChanged ? code : null,
             newTypeValue: typeChanged ? _selectedType : null,
             newDataBinding: dataBindingChanged
                 ? (dataBindingText.isEmpty ? null : dataBindingText)
+                : null,
+            newEntityProviderRef: providerRefChanged
+                ? (_selectedEntityProviderRef?.isEmpty ?? true ? null : _selectedEntityProviderRef)
+                : null,
+            newEntityRendererRef: rendererRefChanged
+                ? (_selectedEntityRendererRef?.isEmpty ?? true ? null : _selectedEntityRendererRef)
                 : null,
           ));
     } else {
@@ -461,16 +676,17 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   }
 
   void _acceptCompletion(BindingCompletion c) {
-    if (c.leaf) {
-      _dataBindingCtrl.text = c.segment;
-      _dataBindingCtrl.selection = TextSelection.collapsed(
-          offset: _dataBindingCtrl.text.length);
-      setState(() {
-        _showCompletions = false;
-        _completionIndex = -1;
-      });
+    _dataBindingCtrl.text = c.segment;
+    _dataBindingCtrl.selection = TextSelection.collapsed(
+        offset: _dataBindingCtrl.text.length);
+    setState(() {
+      _showCompletions = false;
+      _completionIndex = -1;
+    });
+    // For non-leaf (relationship) completions, auto-switch type to ENTITY_SELECT
+    if (!c.leaf && c.suggestedElementType == 'ENTITY_SELECT') {
+      setState(() => _selectedType = 'ENTITY_SELECT');
     }
-    // Non-leaf navigation will be added in Task 2
   }
 
   KeyEventResult _onDataBindingKey(FocusNode _, KeyEvent event) {
@@ -645,6 +861,278 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         _showCompletions = false;
       });
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Entity Provider / Renderer ref dropdowns (for ENTITY_SELECT elements)
+  // ---------------------------------------------------------------------------
+
+  Widget _entityProviderRefDropdown() {
+    final codes = _entityProviderCodes();
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none)')),
+      ...codes.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: codes.contains(_selectedEntityProviderRef) ? _selectedEntityProviderRef : null,
+      decoration: const InputDecoration(
+        labelText: 'Entity Provider',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedEntityProviderRef = v),
+    );
+  }
+
+  Widget _entityRendererRefDropdown() {
+    final codes = _entityRendererCodes();
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none)')),
+      ...codes.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: codes.contains(_selectedEntityRendererRef) ? _selectedEntityRendererRef : null,
+      decoration: const InputDecoration(
+        labelText: 'Entity Renderer',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedEntityRendererRef = v),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mustache template field with auto-proposals (for EntityRenderer)
+  // ---------------------------------------------------------------------------
+
+  List<BindingCompletion> _filteredTemplateCompletions(String filter) {
+    return _templateCompletions.where((c) {
+      if (filter.isEmpty) return true;
+      return c.segment.toLowerCase().contains(filter.toLowerCase());
+    }).toList();
+  }
+
+  Widget _templateField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Focus(
+          onKeyEvent: _onTemplateKey,
+          child: TextField(
+            controller: _templateCtrl,
+            focusNode: _templateFocus,
+            decoration: const InputDecoration(
+              labelText: 'Mustache Template',
+              border: OutlineInputBorder(),
+              isDense: true,
+              hintText: '{{name}}{{#field}} ({{field}}){{/field}}',
+            ),
+            maxLines: 3,
+            onChanged: (value) {
+              // Check if cursor is right after {{ to trigger completions
+              final pos = _templateCtrl.selection.baseOffset;
+              if (pos >= 2) {
+                final before = value.substring(0, pos);
+                final lastOpen = before.lastIndexOf('{{');
+                if (lastOpen >= 0) {
+                  final afterBraces = before.substring(lastOpen + 2);
+                  // Only show completions if we haven't closed the braces yet
+                  if (!afterBraces.contains('}}')) {
+                    setState(() {
+                      _showTemplateCompletions = true;
+                      _templateCompletionIndex = -1;
+                    });
+                    return;
+                  }
+                }
+              }
+              setState(() => _showTemplateCompletions = false);
+            },
+            onTap: () {
+              // Show completions on tap if cursor is inside {{ }}
+              final pos = _templateCtrl.selection.baseOffset;
+              if (pos >= 2) {
+                final before = _templateCtrl.text.substring(0, pos);
+                final lastOpen = before.lastIndexOf('{{');
+                if (lastOpen >= 0 && !before.substring(lastOpen + 2).contains('}}')) {
+                  setState(() => _showTemplateCompletions = true);
+                }
+              }
+            },
+          ),
+        ),
+        if (_showTemplateCompletions && _templateCompletions.isNotEmpty)
+          _buildTemplateCompletionList(),
+      ],
+    );
+  }
+
+  String _currentTemplateFilter() {
+    final pos = _templateCtrl.selection.baseOffset;
+    if (pos < 2) return '';
+    final before = _templateCtrl.text.substring(0, pos);
+    final lastOpen = before.lastIndexOf('{{');
+    if (lastOpen < 0) return '';
+    final afterBraces = before.substring(lastOpen + 2);
+    if (afterBraces.contains('}}')) return '';
+    return afterBraces.replaceFirst(RegExp(r'^[#^/]'), '');
+  }
+
+  String _currentTemplatePrefix() {
+    final pos = _templateCtrl.selection.baseOffset;
+    if (pos < 2) return '';
+    final before = _templateCtrl.text.substring(0, pos);
+    final lastOpen = before.lastIndexOf('{{');
+    if (lastOpen < 0) return '';
+    final afterBraces = before.substring(lastOpen + 2);
+    if (afterBraces.contains('}}')) return '';
+    // Return the prefix characters (#, ^, /) if present
+    if (afterBraces.startsWith('#') || afterBraces.startsWith('^') || afterBraces.startsWith('/')) {
+      return afterBraces.substring(0, 1);
+    }
+    return '';
+  }
+
+  void _acceptTemplateCompletion(BindingCompletion c) {
+    final pos = _templateCtrl.selection.baseOffset;
+    final text = _templateCtrl.text;
+    final before = text.substring(0, pos);
+    final lastOpen = before.lastIndexOf('{{');
+    if (lastOpen < 0) return;
+
+    final prefix = _currentTemplatePrefix();
+    final after = text.substring(pos);
+    String insertion;
+
+    if (prefix == '#') {
+      // Conditional section: insert field}}...{{/field}}
+      insertion = '${c.segment}}}}\u200B{{/${c.segment}}}';
+    } else if (prefix == '^') {
+      // Inverted section
+      insertion = '${c.segment}}}}\u200B{{/${c.segment}}}';
+    } else if (prefix == '/') {
+      // Closing tag
+      insertion = '${c.segment}}}';
+    } else {
+      // Simple interpolation
+      insertion = '${c.segment}}}';
+    }
+
+    final newText = text.substring(0, lastOpen + 2 + prefix.length) + insertion + after;
+    final cursorPos = lastOpen + 2 + prefix.length + insertion.length;
+    _templateCtrl.text = newText;
+    _templateCtrl.selection = TextSelection.collapsed(offset: cursorPos);
+
+    setState(() {
+      _showTemplateCompletions = false;
+      _templateCompletionIndex = -1;
+    });
+  }
+
+  KeyEventResult _onTemplateKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (!_showTemplateCompletions || _templateCompletions.isEmpty) {
+      return KeyEventResult.ignored;
+    }
+
+    final filtered = _filteredTemplateCompletions(_currentTemplateFilter());
+    if (filtered.isEmpty) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      setState(() {
+        _templateCompletionIndex = (_templateCompletionIndex + 1).clamp(0, filtered.length - 1);
+      });
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(() {
+        _templateCompletionIndex = (_templateCompletionIndex - 1).clamp(0, filtered.length - 1);
+      });
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.tab) {
+      if (_templateCompletionIndex >= 0 && _templateCompletionIndex < filtered.length) {
+        _acceptTemplateCompletion(filtered[_templateCompletionIndex]);
+        return KeyEventResult.handled;
+      }
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      setState(() {
+        _showTemplateCompletions = false;
+        _templateCompletionIndex = -1;
+      });
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Widget _buildTemplateCompletionList() {
+    final filtered = _filteredTemplateCompletions(_currentTemplateFilter());
+    if (filtered.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      constraints: const BoxConstraints(maxHeight: 180),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        itemCount: filtered.length,
+        itemExtent: 36,
+        itemBuilder: (context, i) {
+          final c = filtered[i];
+          final isHighlighted = i == _templateCompletionIndex;
+          return InkWell(
+            onTap: () => _acceptTemplateCompletion(c),
+            child: Container(
+              color: isHighlighted ? Colors.blue.shade50 : null,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  Icon(
+                    c.leaf ? Icons.text_fields : Icons.link,
+                    size: 14,
+                    color: isHighlighted ? Colors.blue : Colors.grey,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '{{${c.segment}}}',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        fontWeight: isHighlighted ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    c.javaType,
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Widget _errorText() {

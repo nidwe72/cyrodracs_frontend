@@ -22,6 +22,12 @@ class AppConfigNode {
   final int? dataBindingNodeId;  // DB id of the DataBinding child object
   final String? entityValue;     // rendered enum value on DataForm (DataFormEntityType)
   final int? entityNodeId;       // DB id of the DataFormEntityType child object
+  final String? entityProviderRef;     // EntityProvider code ref on DataFormElement
+  final int? entityProviderRefNodeId;
+  final String? entityRendererRef;     // EntityRenderer code ref on DataFormElement
+  final int? entityRendererRefNodeId;
+  final String? template;              // Mustache template on EntityRenderer
+  final int? templateNodeId;
 
   // collection-node fields
   final String? childTypeCode; // typeCode of children, e.g. "DataForm"
@@ -41,6 +47,12 @@ class AppConfigNode {
     this.dataBindingNodeId,
     this.entityValue,
     this.entityNodeId,
+    this.entityProviderRef,
+    this.entityProviderRefNodeId,
+    this.entityRendererRef,
+    this.entityRendererRefNodeId,
+    this.template,
+    this.templateNodeId,
     this.childTypeCode,
     this.parentId,
   });
@@ -60,6 +72,18 @@ class AppConfigNode {
   /// True when this instance node exposes a "dataBinding" field (DataFormElement).
   bool get hasDataBindingField => typeCode == 'DataFormElement';
 
+  /// True when this instance node exposes entityProvider/entityRenderer ref fields.
+  bool get hasEntitySelectFields => typeCode == 'DataFormElement';
+
+  /// True for EntityProvider nodes.
+  bool get isEntityProvider => typeCode == 'EntityProvider';
+
+  /// True for EntityRenderer nodes.
+  bool get isEntityRenderer => typeCode == 'EntityRenderer';
+
+  /// True when this node exposes a template field (EntityRenderer).
+  bool get hasTemplateField => typeCode == 'EntityRenderer';
+
   // ---------------------------------------------------------------------------
   // JSON parsing
   // ---------------------------------------------------------------------------
@@ -68,6 +92,7 @@ class AppConfigNode {
     final rootId = (json['id'] as num).toInt();
     final rootCode = json['code'] as String;
 
+    // --- DataForms ---
     final dataFormsRaw =
         (json['dataForms'] as Map<String, dynamic>?) ?? {};
     final dataFormNodes = <AppConfigNode>[];
@@ -92,6 +117,10 @@ class AppConfigNode {
           typeNodeId: (elem['typeNodeId'] as num?)?.toInt(),
           dataBinding: elem['dataBinding'] as String?,
           dataBindingNodeId: (elem['dataBindingNodeId'] as num?)?.toInt(),
+          entityProviderRef: elem['entityProviderRef'] as String?,
+          entityProviderRefNodeId: (elem['entityProviderRefNodeId'] as num?)?.toInt(),
+          entityRendererRef: elem['entityRendererRef'] as String?,
+          entityRendererRefNodeId: (elem['entityRendererRefNodeId'] as num?)?.toInt(),
           children: const [],
         ));
       }
@@ -115,6 +144,44 @@ class AppConfigNode {
       ));
     }
 
+    // --- EntityProviders ---
+    final providersRaw =
+        (json['entityProviders'] as Map<String, dynamic>?) ?? {};
+    final providerNodes = <AppConfigNode>[];
+
+    for (final provEntry in providersRaw.entries) {
+      final prov = provEntry.value as Map<String, dynamic>;
+      providerNodes.add(AppConfigNode(
+        label: prov['code'] as String,
+        kind: AppConfigNodeKind.instance,
+        id: (prov['id'] as num?)?.toInt(),
+        typeCode: 'EntityProvider',
+        entityValue: prov['entityType'] as String?,
+        entityNodeId: (prov['entityTypeNodeId'] as num?)?.toInt(),
+        children: const [],
+      ));
+    }
+
+    // --- EntityRenderers ---
+    final renderersRaw =
+        (json['entityRenderers'] as Map<String, dynamic>?) ?? {};
+    final rendererNodes = <AppConfigNode>[];
+
+    for (final renEntry in renderersRaw.entries) {
+      final ren = renEntry.value as Map<String, dynamic>;
+      rendererNodes.add(AppConfigNode(
+        label: ren['code'] as String,
+        kind: AppConfigNodeKind.instance,
+        id: (ren['id'] as num?)?.toInt(),
+        typeCode: 'EntityRenderer',
+        entityValue: ren['entityType'] as String?,
+        entityNodeId: (ren['entityTypeNodeId'] as num?)?.toInt(),
+        template: ren['template'] as String?,
+        templateNodeId: (ren['templateNodeId'] as num?)?.toInt(),
+        children: const [],
+      ));
+    }
+
     return AppConfigNode(
       label: rootCode,
       kind: AppConfigNodeKind.instance,
@@ -127,6 +194,20 @@ class AppConfigNode {
           childTypeCode: 'DataForm',
           parentId: rootId,
           children: dataFormNodes,
+        ),
+        AppConfigNode(
+          label: 'entityProviders',
+          kind: AppConfigNodeKind.collection,
+          childTypeCode: 'EntityProvider',
+          parentId: rootId,
+          children: providerNodes,
+        ),
+        AppConfigNode(
+          label: 'entityRenderers',
+          kind: AppConfigNodeKind.collection,
+          childTypeCode: 'EntityRenderer',
+          parentId: rootId,
+          children: rendererNodes,
         ),
       ],
     );

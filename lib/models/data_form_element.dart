@@ -17,6 +17,7 @@ enum DataFormElementType {
   slider,
   rating,
   datePickerYearMonth,
+  entitySelect,
 }
 
 class DataFormElement {
@@ -25,6 +26,10 @@ class DataFormElement {
   final DataFormElementType type;
   final String? dataBinding;
   final int? dataBindingNodeId;
+  final String? entityProviderRef;
+  final int? entityProviderRefNodeId;
+  final String? entityRendererRef;
+  final int? entityRendererRefNodeId;
   final List<String> options;
   final int cols;
   final bool breakBefore;
@@ -38,6 +43,10 @@ class DataFormElement {
     required this.type,
     this.dataBinding,
     this.dataBindingNodeId,
+    this.entityProviderRef,
+    this.entityProviderRefNodeId,
+    this.entityRendererRef,
+    this.entityRendererRefNodeId,
     this.options = const [],
     this.cols = 12,
     this.breakBefore = false,
@@ -53,6 +62,10 @@ class DataFormElement {
       type: DataFormElementType.values.byName(json['type'] as String),
       dataBinding: json['dataBinding'] as String?,
       dataBindingNodeId: (json['dataBindingNodeId'] as num?)?.toInt(),
+      entityProviderRef: json['entityProviderRef'] as String?,
+      entityProviderRefNodeId: (json['entityProviderRefNodeId'] as num?)?.toInt(),
+      entityRendererRef: json['entityRendererRef'] as String?,
+      entityRendererRefNodeId: (json['entityRendererRefNodeId'] as num?)?.toInt(),
       options: (json['options'] as List<dynamic>?)?.cast<String>() ?? [],
       cols: json['cols'] as int? ?? 12,
       breakBefore: json['breakBefore'] as bool? ?? false,

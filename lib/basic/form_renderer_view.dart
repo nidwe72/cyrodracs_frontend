@@ -3,6 +3,7 @@ import 'package:date_picker_plus/date_picker_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
 import 'package:http/http.dart' as http;
+import '../app_config_editor/app_config_service.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
 
@@ -221,6 +222,16 @@ class _FormRendererViewState extends State<FormRendererView> {
         DataFormElementType.datePickerYearMonth => _YearMonthField(
             label: e.label,
             initialValue: _values[e.key]?.toString(),
+            onSaved: (v) => _values[e.key] = v,
+          ),
+        DataFormElementType.entitySelect => _EntitySelectField(
+            label: e.label,
+            providerCode: e.entityProviderRef ?? '',
+            rendererCode: e.entityRendererRef ?? '',
+            initialValue: _values[e.key] != null
+                ? int.tryParse(_values[e.key].toString())
+                : null,
+            onChanged: (v) => _values[e.key] = v,
             onSaved: (v) => _values[e.key] = v,
           ),
       },
@@ -948,6 +959,117 @@ class _RatingFieldState extends State<_RatingField> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Entity Select field (ENTITY_SELECT)
+// ---------------------------------------------------------------------------
+
+class _EntitySelectField extends StatefulWidget {
+  final String label;
+  final String providerCode;
+  final String rendererCode;
+  final int? initialValue;
+  final void Function(int?) onChanged;
+  final void Function(int?) onSaved;
+
+  const _EntitySelectField({
+    required this.label,
+    required this.providerCode,
+    required this.rendererCode,
+    this.initialValue,
+    required this.onChanged,
+    required this.onSaved,
+  });
+
+  @override
+  State<_EntitySelectField> createState() => _EntitySelectFieldState();
+}
+
+class _EntitySelectFieldState extends State<_EntitySelectField> {
+  final _service = AppConfigService();
+  List<EntityOption> _options = [];
+  int? _selectedId;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedId = widget.initialValue;
+    _fetchOptions();
+  }
+
+  Future<void> _fetchOptions() async {
+    if (widget.providerCode.isEmpty || widget.rendererCode.isEmpty) {
+      setState(() {
+        _loading = false;
+        _error = 'Missing provider or renderer configuration';
+      });
+      return;
+    }
+    try {
+      final options = await _service.fetchEntityOptions(
+          widget.providerCode, widget.rendererCode);
+      if (!mounted) return;
+      setState(() {
+        _options = options;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return InputDecorator(
+        decoration: InputDecoration(
+          labelText: widget.label,
+          border: const OutlineInputBorder(),
+        ),
+        child: const SizedBox(
+          height: 20,
+          child: Center(child: LinearProgressIndicator()),
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return InputDecorator(
+        decoration: InputDecoration(
+          labelText: widget.label,
+          border: const OutlineInputBorder(),
+          errorText: _error,
+        ),
+        child: const SizedBox.shrink(),
+      );
+    }
+
+    final items = [
+      const DropdownMenuItem<int>(value: null, child: Text('(none)')),
+      ..._options.map((o) => DropdownMenuItem(value: o.id, child: Text(o.label))),
+    ];
+
+    return DropdownButtonFormField<int>(
+      value: _options.any((o) => o.id == _selectedId) ? _selectedId : null,
+      decoration: InputDecoration(
+        labelText: widget.label,
+        border: const OutlineInputBorder(),
+      ),
+      items: items,
+      onChanged: (v) {
+        setState(() => _selectedId = v);
+        widget.onChanged(v);
+      },
+      onSaved: (_) => widget.onSaved(_selectedId),
     );
   }
 }
