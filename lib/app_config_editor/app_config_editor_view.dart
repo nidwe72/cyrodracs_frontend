@@ -352,6 +352,7 @@ class _AppConfigEditorViewState extends State<AppConfigEditorView> {
     final detailPanel = AppConfigDetailPanel(
       key: ValueKey(_detailKey),
       node: _detailNode,
+      root: _root,
       stale: _detailKey != _selectedKey,
       service: _service,
       onTreeChanged: _onTreeChanged,

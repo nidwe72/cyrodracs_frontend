@@ -93,6 +93,16 @@ const _entityDefs = [
       _ColDef('Name', 'name'),
     ],
   ),
+  _EntityDef(
+    label: 'Cameras',
+    apiPath: '/api/cameras',
+    entityTypeValue: 'CAMERA',
+    columns: [
+      _ColDef('ID', 'id'),
+      _ColDef('Name', 'name'),
+      _ColDef('Release Year', 'releaseYear'),
+    ],
+  ),
 ];
 
 class AppView extends StatefulWidget {

@@ -16,10 +16,12 @@ class AppConfigNode {
   // instance-node fields
   final int? id;
   final String? typeCode;
-  final String? typeValue;   // rendered enum value on DataFormElement
-  final int? typeNodeId;     // DB id of the DataFormElementType child object
-  final String? entityValue; // rendered enum value on DataForm (DataFormEntityType)
-  final int? entityNodeId;   // DB id of the DataFormEntityType child object
+  final String? typeValue;       // rendered enum value on DataFormElement
+  final int? typeNodeId;         // DB id of the DataFormElementType child object
+  final String? dataBinding;     // entity attribute path on DataFormElement
+  final int? dataBindingNodeId;  // DB id of the DataBinding child object
+  final String? entityValue;     // rendered enum value on DataForm (DataFormEntityType)
+  final int? entityNodeId;       // DB id of the DataFormEntityType child object
 
   // collection-node fields
   final String? childTypeCode; // typeCode of children, e.g. "DataForm"
@@ -35,6 +37,8 @@ class AppConfigNode {
     this.typeCode,
     this.typeValue,
     this.typeNodeId,
+    this.dataBinding,
+    this.dataBindingNodeId,
     this.entityValue,
     this.entityNodeId,
     this.childTypeCode,
@@ -52,6 +56,9 @@ class AppConfigNode {
 
   /// True when this instance node exposes an "entity" enum field (DataForm).
   bool get hasEntityField => typeCode == 'DataForm';
+
+  /// True when this instance node exposes a "dataBinding" field (DataFormElement).
+  bool get hasDataBindingField => typeCode == 'DataFormElement';
 
   // ---------------------------------------------------------------------------
   // JSON parsing
@@ -83,6 +90,8 @@ class AppConfigNode {
           typeCode: 'DataFormElement',
           typeValue: elem['type'] as String?,
           typeNodeId: (elem['typeNodeId'] as num?)?.toInt(),
+          dataBinding: elem['dataBinding'] as String?,
+          dataBindingNodeId: (elem['dataBindingNodeId'] as num?)?.toInt(),
           children: const [],
         ));
       }

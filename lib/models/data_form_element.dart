@@ -23,6 +23,8 @@ class DataFormElement {
   final String key;
   final String label;
   final DataFormElementType type;
+  final String? dataBinding;
+  final int? dataBindingNodeId;
   final List<String> options;
   final int cols;
   final bool breakBefore;
@@ -34,6 +36,8 @@ class DataFormElement {
     required this.key,
     required this.label,
     required this.type,
+    this.dataBinding,
+    this.dataBindingNodeId,
     this.options = const [],
     this.cols = 12,
     this.breakBefore = false,
@@ -47,6 +51,8 @@ class DataFormElement {
       key: json['key'] as String,
       label: json['label'] as String,
       type: DataFormElementType.values.byName(json['type'] as String),
+      dataBinding: json['dataBinding'] as String?,
+      dataBindingNodeId: (json['dataBindingNodeId'] as num?)?.toInt(),
       options: (json['options'] as List<dynamic>?)?.cast<String>() ?? [],
       cols: json['cols'] as int? ?? 12,
       breakBefore: json['breakBefore'] as bool? ?? false,
