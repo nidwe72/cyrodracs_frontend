@@ -142,6 +142,19 @@ class AppConfigService {
         jsonDecode(response.body) as Map<String, dynamic>);
   }
 
+  Future<AppConfigNode?> copyNode(int id, String newCode) async {
+    final response = await http.post(
+      Uri.parse('$_base/node/$id/copy'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'newCode': newCode}),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Failed to copy node: HTTP ${response.statusCode}');
+    }
+    return AppConfigNode.fromJson(
+        jsonDecode(response.body) as Map<String, dynamic>);
+  }
+
   Future<AppConfigNode?> updateNode(int id,
       {String? code, String? enumValue}) async {
     final body = <String, dynamic>{

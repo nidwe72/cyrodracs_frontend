@@ -38,6 +38,30 @@ const _kViewNodeTypes = [
   'STATIC_PAGE',
 ];
 
+const _kFilterNodeTypes = [
+  'COMPARISON',
+  'AND_GROUP',
+  'OR_GROUP',
+];
+
+const _kFilterOperators = [
+  'EQUALS',
+  'NOT_EQUALS',
+  'GREATER_THAN',
+  'GREATER_THAN_OR_EQUAL',
+  'LESS_THAN',
+  'LESS_THAN_OR_EQUAL',
+  'IS_NULL',
+  'IS_NOT_NULL',
+  'IN',
+  'LIKE',
+];
+
+const _kSortDirections = [
+  'ASC',
+  'DESC',
+];
+
 /// Detail panel for the AppConfigEditorView.
 ///
 /// * No node selected  → placeholder hint.
@@ -82,6 +106,14 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   String _selectedViewNodeType = _kViewNodeTypes.first;
   String? _selectedDataFormRef;
   String? _selectedTableColRendererRef;
+  // FilterNode state
+  String _selectedFilterNodeType = _kFilterNodeTypes.first;
+  String _selectedFilterOperator = _kFilterOperators.first;
+  late TextEditingController _filterFieldCtrl;
+  late TextEditingController _filterValueCtrl;
+  // SortField state
+  late TextEditingController _sortFieldCtrl;
+  String _selectedSortDirection = _kSortDirections.first;
   bool _loading = false;
   String? _error;
 
@@ -129,12 +161,25 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _selectedViewNodeType = n?.typeValue ?? _kViewNodeTypes.first;
     _selectedDataFormRef = n?.dataFormRef;
     _selectedTableColRendererRef = n?.entityRendererRef;
+    _filterFieldCtrl = TextEditingController(text: n?.dataBinding ?? '');
+    _filterValueCtrl = TextEditingController(text: n?.viewNodeLabel ?? '');
+    _sortFieldCtrl = TextEditingController(text: n?.dataBinding ?? '');
+    _selectedFilterNodeType = (n?.typeValue != null && _kFilterNodeTypes.contains(n!.typeValue))
+        ? n.typeValue! : _kFilterNodeTypes.first;
+    _selectedFilterOperator = (n?.entityValue != null && _kFilterOperators.contains(n!.entityValue))
+        ? n.entityValue! : _kFilterOperators.first;
+    _selectedSortDirection = (n?.typeValue != null && _kSortDirections.contains(n!.typeValue))
+        ? n.typeValue! : _kSortDirections.first;
     _parentEntityType = _findParentEntityType();
     final shouldFetchCompletions = _parentEntityType != null && n != null
         && (n.hasDataBindingField
             || n.isTableColumn
+            || n.isFilterNode
+            || n.isSortField
             || (n.isCollection && n.childTypeCode == 'DataFormElement')
-            || (n.isCollection && n.childTypeCode == 'TableColumn'));
+            || (n.isCollection && n.childTypeCode == 'TableColumn')
+            || (n.isCollection && n.childTypeCode == 'FilterNode')
+            || (n.isCollection && n.childTypeCode == 'SortField'));
     if (shouldFetchCompletions) {
       _fetchCompletions();
     }
@@ -156,6 +201,9 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _tableColKeyCtrl.dispose();
     _tableColHeaderCtrl.dispose();
     _tableColKeyFocus.dispose();
+    _filterFieldCtrl.dispose();
+    _filterValueCtrl.dispose();
+    _sortFieldCtrl.dispose();
     super.dispose();
   }
 
@@ -192,13 +240,60 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     }
 
     // ViewNode-based: TableColumn or "tableColumns" collection
-    // Find the parent ViewNode, get its entityProviderRef, then look up the provider's entityType
     String? providerRef = _findParentViewNodeProviderRef();
     if (providerRef != null) {
       return _resolveProviderEntityType(providerRef);
     }
 
+    // EntityProvider-based: FilterNode, SortField, or their collections
+    // Walk up to find the parent EntityProvider's entityType
+    if (n.isFilterNode || n.isSortField
+        || (n.isCollection && (n.childTypeCode == 'FilterNode' || n.childTypeCode == 'SortField'))) {
+      final providerEntityType = _findParentProviderEntityType();
+      if (providerEntityType != null) return providerEntityType;
+    }
+
     return null;
+  }
+
+  /// Finds the entityType of the EntityProvider that owns this FilterNode or SortField.
+  String? _findParentProviderEntityType() {
+    final n = widget.node;
+    final root = widget.root;
+    if (n == null || root == null) return null;
+
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'entityProviders') {
+        for (final prov in child.children) {
+          // Check if this provider contains the node (directly or nested)
+          if (_nodeIsDescendant(prov, n)) {
+            return prov.entityValue;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  bool _nodeIsDescendant(AppConfigNode parent, AppConfigNode target) {
+    if (_nodesMatch(parent, target)) return true;
+    for (final child in parent.children) {
+      if (_nodesMatch(child, target)) return true;
+      if (_nodeIsDescendant(child, target)) return true;
+    }
+    return false;
+  }
+
+  bool _nodesMatch(AppConfigNode a, AppConfigNode b) {
+    if (a.isInstance && b.isInstance) {
+      // Instance nodes: match by DB id (must be non-null)
+      return a.id != null && a.id == b.id && a.typeCode == b.typeCode;
+    }
+    if (a.isCollection && b.isCollection) {
+      // Collection nodes: match by label + parentId (unique within a parent)
+      return a.label == b.label && a.parentId != null && a.parentId == b.parentId;
+    }
+    return false;
   }
 
   /// Finds the entityProviderRef of the ViewNode that owns this TableColumn or tableColumns collection.
@@ -376,6 +471,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     final isRenderer = col.childTypeCode == 'EntityRenderer';
     final isViewNode = col.childTypeCode == 'ViewNode';
     final isTableColumn = col.childTypeCode == 'TableColumn';
+    final isFilterNode = col.childTypeCode == 'FilterNode';
+    final isSortField = col.childTypeCode == 'SortField';
     final showBinding = isElement && _parentEntityType != null;
     final showEntitySelectRefs = isElement && _selectedType == 'ENTITY_SELECT';
 
@@ -390,6 +487,10 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       title = 'Add ViewNode';
     } else if (isTableColumn) {
       title = 'Add TableColumn';
+    } else if (isFilterNode) {
+      title = 'Add Filter Condition';
+    } else if (isSortField) {
+      title = 'Add Sort Field';
     } else {
       title = 'Add DataForm';
     }
@@ -429,6 +530,26 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             _tableColumnHeaderField(),
             const SizedBox(height: 12),
             _tableColumnRendererDropdown(),
+          ],
+          if (isFilterNode) ...[
+            const SizedBox(height: 12),
+            _filterNodeTypeDropdown(),
+            if (_selectedFilterNodeType == 'COMPARISON') ...[
+              const SizedBox(height: 12),
+              _filterFieldField(),
+              const SizedBox(height: 12),
+              _filterOperatorDropdown(),
+              if (_selectedFilterOperator != 'IS_NULL' && _selectedFilterOperator != 'IS_NOT_NULL') ...[
+                const SizedBox(height: 12),
+                _filterValueField(),
+              ],
+            ],
+          ],
+          if (isSortField) ...[
+            const SizedBox(height: 12),
+            _sortFieldField(),
+            const SizedBox(height: 12),
+            _sortDirectionDropdown(),
           ],
           if (showBinding) ...[
             const SizedBox(height: 12),
@@ -690,6 +811,84 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         }
         return tree;
       });
+    } else if (col.childTypeCode == 'FilterNode') {
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.addNode(
+          parentObjectId: col.parentId,
+          typeCode: 'FilterNode',
+          code: code,
+        );
+        // Re-fetch to find new node ID
+        tree = await widget.service.fetchTree();
+        if (tree == null) return tree;
+        // Search for the new FilterNode
+        int? newId;
+        void search(List<AppConfigNode> nodes) {
+          for (final n in nodes) {
+            if (n.isFilterNode && n.label == code) { newId = n.id; return; }
+            for (final c in n.children) { search([c]); }
+          }
+        }
+        search(tree.children);
+        if (newId != null) {
+          tree = await widget.service.addNode(
+            parentObjectId: newId,
+            typeCode: 'FilterNodeType',
+            code: '${code}_type',
+            enumValue: _selectedFilterNodeType,
+          );
+          if (_selectedFilterNodeType == 'COMPARISON') {
+            final field = _filterFieldCtrl.text.trim();
+            if (field.isNotEmpty) {
+              tree = await widget.service.addNode(
+                parentObjectId: newId, typeCode: 'FilterField', code: field,
+              );
+            }
+            tree = await widget.service.addNode(
+              parentObjectId: newId, typeCode: 'FilterOperator',
+              code: '${code}_op', enumValue: _selectedFilterOperator,
+            );
+            final value = _filterValueCtrl.text.trim();
+            if (value.isNotEmpty && _selectedFilterOperator != 'IS_NULL' && _selectedFilterOperator != 'IS_NOT_NULL') {
+              tree = await widget.service.addNode(
+                parentObjectId: newId, typeCode: 'FilterValue', code: value,
+              );
+            }
+          }
+        }
+        return tree;
+      });
+    } else if (col.childTypeCode == 'SortField') {
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.addNode(
+          parentObjectId: col.parentId,
+          typeCode: 'SortField',
+          code: code,
+        );
+        tree = await widget.service.fetchTree();
+        if (tree == null) return tree;
+        int? newId;
+        void search(List<AppConfigNode> nodes) {
+          for (final n in nodes) {
+            if (n.isSortField && n.label == code) { newId = n.id; return; }
+            for (final c in n.children) { search([c]); }
+          }
+        }
+        search(tree.children);
+        if (newId != null) {
+          final field = _sortFieldCtrl.text.trim();
+          if (field.isNotEmpty) {
+            tree = await widget.service.addNode(
+              parentObjectId: newId, typeCode: 'SortFieldField', code: field,
+            );
+          }
+          tree = await widget.service.addNode(
+            parentObjectId: newId, typeCode: 'SortDirection',
+            code: '${code}_dir', enumValue: _selectedSortDirection,
+          );
+        }
+        return tree;
+      });
     } else {
       await _run(() => widget.service.addNode(
             parentObjectId: col.parentId,
@@ -748,6 +947,26 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             const SizedBox(height: 12),
             _tableColumnRendererDropdown(),
           ],
+          if (n.isFilterNode) ...[
+            const SizedBox(height: 12),
+            _filterNodeTypeDropdown(),
+            if (_selectedFilterNodeType == 'COMPARISON') ...[
+              const SizedBox(height: 12),
+              _filterFieldField(),
+              const SizedBox(height: 12),
+              _filterOperatorDropdown(),
+              if (_selectedFilterOperator != 'IS_NULL' && _selectedFilterOperator != 'IS_NOT_NULL') ...[
+                const SizedBox(height: 12),
+                _filterValueField(),
+              ],
+            ],
+          ],
+          if (n.isSortField) ...[
+            const SizedBox(height: 12),
+            _sortFieldField(),
+            const SizedBox(height: 12),
+            _sortDirectionDropdown(),
+          ],
           if (n.hasDataBindingField && _parentEntityType != null) ...[
             const SizedBox(height: 12),
             _dataBindingField(),
@@ -771,6 +990,11 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
                 child: _loading ? _spinner() : const Text('Save'),
               ),
               if (n.isDeletable) ...[
+                const SizedBox(width: 12),
+                OutlinedButton(
+                  onPressed: _loading ? null : () => _onCopy(n),
+                  child: const Text('Copy'),
+                ),
                 const SizedBox(width: 12),
                 OutlinedButton(
                   onPressed: _loading ? null : () => _onDelete(n),
@@ -825,12 +1049,28 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && _tableColHeaderCtrl.text.trim() != (n.viewNodeLabel ?? '');
     final tableColRendererChanged = n.isTableColumn
         && (_selectedTableColRendererRef ?? '') != (n.entityRendererRef ?? '');
+    // FilterNode-specific change detection
+    final filterTypeChanged = n.isFilterNode
+        && _selectedFilterNodeType != (n.typeValue ?? '');
+    final filterFieldChanged = n.isFilterNode
+        && _filterFieldCtrl.text.trim() != (n.dataBinding ?? '');
+    final filterOperatorChanged = n.isFilterNode
+        && _selectedFilterOperator != (n.entityValue ?? '');
+    final filterValueChanged = n.isFilterNode
+        && _filterValueCtrl.text.trim() != (n.viewNodeLabel ?? '');
+    // SortField-specific change detection
+    final sortFieldChanged = n.isSortField
+        && _sortFieldCtrl.text.trim() != (n.dataBinding ?? '');
+    final sortDirectionChanged = n.isSortField
+        && _selectedSortDirection != (n.typeValue ?? '');
 
     if (!codeChanged && !typeChanged && !entityChanged && !dataBindingChanged
         && !providerRefChanged && !rendererRefChanged && !templateChanged
         && !viewLabelChanged && !viewNodeTypeChanged && !dataFormRefChanged
         && !viewProviderRefChanged && !viewContentChanged
-        && !tableColKeyChanged && !tableColHeaderChanged && !tableColRendererChanged) {
+        && !tableColKeyChanged && !tableColHeaderChanged && !tableColRendererChanged
+        && !filterTypeChanged && !filterFieldChanged && !filterOperatorChanged && !filterValueChanged
+        && !sortFieldChanged && !sortDirectionChanged) {
       return;
     }
 
@@ -986,6 +1226,82 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         }
         return tree;
       });
+    } else if (n.isFilterNode) {
+      await _run(() async {
+        AppConfigNode? tree;
+        if (codeChanged) {
+          tree = await widget.service.updateNode(n.id!, code: code);
+        }
+        if (filterTypeChanged) {
+          if (n.typeNodeId != null) {
+            tree = await widget.service.updateNode(n.typeNodeId!, enumValue: _selectedFilterNodeType);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'FilterNodeType',
+              code: '${code}_type', enumValue: _selectedFilterNodeType,
+            );
+          }
+        }
+        final fieldText = _filterFieldCtrl.text.trim();
+        if (filterFieldChanged && fieldText.isNotEmpty) {
+          if (n.dataBindingNodeId != null) {
+            tree = await widget.service.updateNode(n.dataBindingNodeId!, code: fieldText);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'FilterField', code: fieldText,
+            );
+          }
+        }
+        if (filterOperatorChanged) {
+          if (n.entityNodeId != null) {
+            tree = await widget.service.updateNode(n.entityNodeId!, enumValue: _selectedFilterOperator);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'FilterOperator',
+              code: '${code}_op', enumValue: _selectedFilterOperator,
+            );
+          }
+        }
+        final valText = _filterValueCtrl.text.trim();
+        if (filterValueChanged && valText.isNotEmpty) {
+          if (n.viewNodeLabelNodeId != null) {
+            tree = await widget.service.updateNode(n.viewNodeLabelNodeId!, code: valText);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'FilterValue', code: valText,
+            );
+          }
+        }
+        return tree;
+      });
+    } else if (n.isSortField) {
+      await _run(() async {
+        AppConfigNode? tree;
+        if (codeChanged) {
+          tree = await widget.service.updateNode(n.id!, code: code);
+        }
+        final fieldText = _sortFieldCtrl.text.trim();
+        if (sortFieldChanged && fieldText.isNotEmpty) {
+          if (n.dataBindingNodeId != null) {
+            tree = await widget.service.updateNode(n.dataBindingNodeId!, code: fieldText);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'SortFieldField', code: fieldText,
+            );
+          }
+        }
+        if (sortDirectionChanged) {
+          if (n.typeNodeId != null) {
+            tree = await widget.service.updateNode(n.typeNodeId!, enumValue: _selectedSortDirection);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'SortDirection',
+              code: '${code}_dir', enumValue: _selectedSortDirection,
+            );
+          }
+        }
+        return tree;
+      });
     } else {
       await _run(() => widget.service.updateNode(n.id!, code: code));
     }
@@ -1011,6 +1327,39 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     );
     if (confirmed == true) {
       await _run(() => widget.service.deleteNode(n.id!));
+    }
+  }
+
+  Future<void> _onCopy(AppConfigNode n) async {
+    final codeCtrl = TextEditingController(text: '${n.label}_copy');
+    final newCode = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Copy "${n.label}"'),
+        content: TextField(
+          controller: codeCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'New code',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, codeCtrl.text.trim()),
+            child: const Text('Copy'),
+          ),
+        ],
+      ),
+    );
+    codeCtrl.dispose();
+    if (newCode != null && newCode.isNotEmpty) {
+      await _run(() => widget.service.copyNode(n.id!, newCode));
     }
   }
 
@@ -1814,6 +2163,269 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       ),
       items: items,
       onChanged: (v) => setState(() => _selectedTableColRendererRef = v),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // FilterNode-specific fields
+  // ---------------------------------------------------------------------------
+
+  Widget _filterNodeTypeDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _kFilterNodeTypes.contains(_selectedFilterNodeType)
+          ? _selectedFilterNodeType : _kFilterNodeTypes.first,
+      decoration: const InputDecoration(
+        labelText: 'Filter Type',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _kFilterNodeTypes
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) setState(() => _selectedFilterNodeType = v);
+      },
+    );
+  }
+
+  /// Extracts the prefix (all segments before the last dot) from the filter field.
+  /// E.g., "producer.name" → prefix="producer", lastSegment="name"
+  /// E.g., "producer." → prefix="producer", lastSegment=""
+  /// E.g., "name" → prefix="", lastSegment="name"
+  String _filterFieldPrefix() {
+    final text = _filterFieldCtrl.text;
+    final lastDot = text.lastIndexOf('.');
+    if (lastDot < 0) return '';
+    return text.substring(0, lastDot);
+  }
+
+  String _filterFieldLastSegment() {
+    final text = _filterFieldCtrl.text;
+    final lastDot = text.lastIndexOf('.');
+    if (lastDot < 0) return text;
+    return text.substring(lastDot + 1);
+  }
+
+  Widget _filterFieldField() {
+    final entityLabel = _completionEntityLabel ?? _parentEntityType ?? '';
+    final hasCompletions = _completions.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: _filterFieldCtrl,
+          decoration: InputDecoration(
+            labelText: 'Field (dot-path)',
+            border: const OutlineInputBorder(),
+            isDense: true,
+            prefixText: hasCompletions ? '$entityLabel.' : null,
+            prefixStyle: const TextStyle(
+                color: Colors.grey, fontWeight: FontWeight.w500),
+          ),
+          onChanged: (value) {
+            // Determine the prefix (everything before the last dot)
+            final lastDot = value.lastIndexOf('.');
+            if (lastDot >= 0) {
+              final prefix = value.substring(0, lastDot);
+              // Re-fetch whenever the prefix segment changes
+              _fetchCompletions(prefix: prefix);
+            } else {
+              // No dot — back to root level
+              _fetchCompletions();
+            }
+            setState(() {});
+          },
+          onTap: () => setState(() {}),
+        ),
+        if (_completions.isNotEmpty) _buildFilterFieldCompletionList(),
+      ],
+    );
+  }
+
+  Widget _buildFilterFieldCompletionList() {
+    final lastSegment = _filterFieldLastSegment().toLowerCase();
+    final filtered = _completions.where((c) {
+      if (lastSegment.isEmpty) return true;
+      return c.segment.toLowerCase().contains(lastSegment);
+    }).toList();
+    if (filtered.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      constraints: const BoxConstraints(maxHeight: 140),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        itemCount: filtered.length,
+        itemExtent: 32,
+        itemBuilder: (context, i) {
+          final c = filtered[i];
+          final prefix = _filterFieldPrefix();
+          return InkWell(
+            onTap: () {
+              if (c.leaf) {
+                // Leaf: set the full dot-path
+                final fullPath = prefix.isEmpty ? c.segment : '$prefix.${c.segment}';
+                _filterFieldCtrl.text = fullPath;
+                _filterFieldCtrl.selection = TextSelection.collapsed(
+                    offset: fullPath.length);
+                setState(() {});
+              } else {
+                // Non-leaf (relationship): append segment + dot, fetch next level
+                final newPrefix = prefix.isEmpty ? c.segment : '$prefix.${c.segment}';
+                _filterFieldCtrl.text = '$newPrefix.';
+                _filterFieldCtrl.selection = TextSelection.collapsed(
+                    offset: _filterFieldCtrl.text.length);
+                _fetchCompletions(prefix: newPrefix);
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Icon(c.leaf ? Icons.text_fields : Icons.arrow_forward,
+                      size: 14, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(c.segment,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13))),
+                  Text(c.javaType,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _filterOperatorDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _kFilterOperators.contains(_selectedFilterOperator)
+          ? _selectedFilterOperator : _kFilterOperators.first,
+      decoration: const InputDecoration(
+        labelText: 'Operator',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _kFilterOperators
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) setState(() => _selectedFilterOperator = v);
+      },
+    );
+  }
+
+  Widget _filterValueField() => TextField(
+        controller: _filterValueCtrl,
+        decoration: const InputDecoration(
+          labelText: 'Value',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+      );
+
+  // ---------------------------------------------------------------------------
+  // SortField-specific fields
+  // ---------------------------------------------------------------------------
+
+  Widget _sortFieldField() {
+    final entityLabel = _completionEntityLabel ?? _parentEntityType ?? '';
+    final hasCompletions = _completions.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: _sortFieldCtrl,
+          decoration: InputDecoration(
+            labelText: 'Field (dot-path)',
+            border: const OutlineInputBorder(),
+            isDense: true,
+            prefixText: hasCompletions ? '$entityLabel.' : null,
+            prefixStyle: const TextStyle(
+                color: Colors.grey, fontWeight: FontWeight.w500),
+          ),
+          onChanged: (_) => setState(() {}),
+          onTap: () => setState(() {}),
+        ),
+        if (_completions.isNotEmpty) _buildSortFieldCompletionList(),
+      ],
+    );
+  }
+
+  Widget _buildSortFieldCompletionList() {
+    final filter = _sortFieldCtrl.text.toLowerCase();
+    final filtered = _completions.where((c) {
+      if (filter.isEmpty) return true;
+      return c.segment.toLowerCase().contains(filter);
+    }).toList();
+    if (filtered.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      constraints: const BoxConstraints(maxHeight: 140),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        itemCount: filtered.length,
+        itemExtent: 32,
+        itemBuilder: (context, i) {
+          final c = filtered[i];
+          return InkWell(
+            onTap: () {
+              _sortFieldCtrl.text = c.segment;
+              _sortFieldCtrl.selection = TextSelection.collapsed(
+                  offset: c.segment.length);
+              setState(() {});
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Icon(c.leaf ? Icons.text_fields : Icons.link,
+                      size: 14, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(c.segment,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13))),
+                  Text(c.javaType,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _sortDirectionDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _kSortDirections.contains(_selectedSortDirection)
+          ? _selectedSortDirection : _kSortDirections.first,
+      decoration: const InputDecoration(
+        labelText: 'Direction',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _kSortDirections
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) setState(() => _selectedSortDirection = v);
+      },
     );
   }
 

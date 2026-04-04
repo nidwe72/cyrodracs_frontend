@@ -104,6 +104,12 @@ class AppConfigNode {
   /// True for TableColumn nodes.
   bool get isTableColumn => typeCode == 'TableColumn';
 
+  /// True for FilterNode nodes.
+  bool get isFilterNode => typeCode == 'FilterNode';
+
+  /// True for SortField nodes.
+  bool get isSortField => typeCode == 'SortField';
+
   // ---------------------------------------------------------------------------
   // JSON parsing
   // ---------------------------------------------------------------------------
@@ -171,14 +177,56 @@ class AppConfigNode {
 
     for (final provEntry in providersRaw.entries) {
       final prov = provEntry.value as Map<String, dynamic>;
+      final provId = (prov['id'] as num?)?.toInt();
+      final provChildren = <AppConfigNode>[];
+
+      // Parse filter — wrap in a collection-like node so the admin can add/manage it
+      final filterChildren = <AppConfigNode>[];
+      if (prov['filter'] != null) {
+        final filterNode = _parseFilterNode(prov['filter'] as Map<String, dynamic>);
+        filterChildren.add(filterNode);
+      }
+      provChildren.add(AppConfigNode(
+        label: 'filter',
+        kind: AppConfigNodeKind.collection,
+        childTypeCode: 'FilterNode',
+        parentId: provId,
+        children: filterChildren,
+      ));
+
+      // Parse sortFields (always show collection so user can add)
+      final sortFieldsRaw = (prov['sortFields'] as List<dynamic>?) ?? [];
+      final sortNodes = <AppConfigNode>[];
+      for (final sf in sortFieldsRaw) {
+        final s = sf as Map<String, dynamic>;
+        sortNodes.add(AppConfigNode(
+          label: s['code'] as String,
+          kind: AppConfigNodeKind.instance,
+          id: (s['id'] as num?)?.toInt(),
+          typeCode: 'SortField',
+          dataBinding: s['field'] as String?,
+          dataBindingNodeId: (s['fieldNodeId'] as num?)?.toInt(),
+          typeValue: s['direction'] as String?,
+          typeNodeId: (s['directionNodeId'] as num?)?.toInt(),
+          children: const [],
+        ));
+      }
+      provChildren.add(AppConfigNode(
+        label: 'sortFields',
+        kind: AppConfigNodeKind.collection,
+        childTypeCode: 'SortField',
+        parentId: provId,
+        children: sortNodes,
+      ));
+
       providerNodes.add(AppConfigNode(
         label: prov['code'] as String,
         kind: AppConfigNodeKind.instance,
-        id: (prov['id'] as num?)?.toInt(),
+        id: provId,
         typeCode: 'EntityProvider',
         entityValue: prov['entityType'] as String?,
         entityNodeId: (prov['entityTypeNodeId'] as num?)?.toInt(),
-        children: const [],
+        children: provChildren,
       ));
     }
 
@@ -327,6 +375,52 @@ class AppConfigNode {
   // ---------------------------------------------------------------------------
   // Helpers used by the service after mutations
   // ---------------------------------------------------------------------------
+
+  static AppConfigNode _parseFilterNode(Map<String, dynamic> fn) {
+    final fnId = (fn['id'] as num?)?.toInt();
+    final fnCode = fn['code'] as String;
+
+    // Parse children (recursive AND_GROUP / OR_GROUP)
+    final childrenRaw = (fn['children'] as List<dynamic>?) ?? [];
+    final childNodes = <AppConfigNode>[];
+    for (final child in childrenRaw) {
+      childNodes.add(_parseFilterNode(child as Map<String, dynamic>));
+    }
+
+    // Parse IN values
+    final valuesRaw = (fn['values'] as List<dynamic>?) ?? [];
+    final valueItems = valuesRaw.map((v) => v.toString()).toList();
+
+    final fnType = fn['type'] as String?;
+    final instanceChildren = <AppConfigNode>[];
+    // Always show children collection for group types so user can add conditions
+    if (fnType == 'AND_GROUP' || fnType == 'OR_GROUP' || childNodes.isNotEmpty) {
+      instanceChildren.add(AppConfigNode(
+        label: 'children',
+        kind: AppConfigNodeKind.collection,
+        childTypeCode: 'FilterNode',
+        parentId: fnId,
+        children: childNodes,
+      ));
+    }
+
+    return AppConfigNode(
+      label: fnCode,
+      kind: AppConfigNodeKind.instance,
+      id: fnId,
+      typeCode: 'FilterNode',
+      typeValue: fnType,
+      typeNodeId: (fn['typeNodeId'] as num?)?.toInt(),
+      dataBinding: fn['field'] as String?,         // filter field (dot-path)
+      dataBindingNodeId: (fn['fieldNodeId'] as num?)?.toInt(),
+      entityValue: fn['operator'] as String?,      // FilterOperator enum (reuse entityValue field)
+      entityNodeId: (fn['operatorNodeId'] as num?)?.toInt(),
+      viewNodeLabel: fn['value'] as String?,       // comparison value (reuse viewNodeLabel)
+      viewNodeLabelNodeId: (fn['valueNodeId'] as num?)?.toInt(),
+      viewContent: valueItems.join(','),           // IN values as comma-separated (reuse viewContent)
+      children: instanceChildren,
+    );
+  }
 
   /// Finds a DataFormElement by its parent DataForm's id and the element's code.
   /// Used after adding a new element to retrieve its assigned DB id.
