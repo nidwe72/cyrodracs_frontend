@@ -29,6 +29,14 @@ class AppConfigNode {
   final String? template;              // Mustache template on EntityRenderer
   final int? templateNodeId;
 
+  // ViewNode fields
+  final String? viewNodeLabel;         // display label on ViewNode
+  final int? viewNodeLabelNodeId;
+  final String? dataFormRef;           // DataForm code ref on ViewNode
+  final int? dataFormRefNodeId;
+  final String? viewContent;           // content identifier on STATIC_PAGE
+  final int? viewContentNodeId;
+
   // collection-node fields
   final String? childTypeCode; // typeCode of children, e.g. "DataForm"
   final int? parentId;         // DB id of the enclosing instance node
@@ -53,6 +61,12 @@ class AppConfigNode {
     this.entityRendererRefNodeId,
     this.template,
     this.templateNodeId,
+    this.viewNodeLabel,
+    this.viewNodeLabelNodeId,
+    this.dataFormRef,
+    this.dataFormRefNodeId,
+    this.viewContent,
+    this.viewContentNodeId,
     this.childTypeCode,
     this.parentId,
   });
@@ -83,6 +97,12 @@ class AppConfigNode {
 
   /// True when this node exposes a template field (EntityRenderer).
   bool get hasTemplateField => typeCode == 'EntityRenderer';
+
+  /// True for ViewNode nodes.
+  bool get isViewNode => typeCode == 'ViewNode';
+
+  /// True for TableColumn nodes.
+  bool get isTableColumn => typeCode == 'TableColumn';
 
   // ---------------------------------------------------------------------------
   // JSON parsing
@@ -182,6 +202,15 @@ class AppConfigNode {
       ));
     }
 
+    // --- ViewTree ---
+    final viewTreeRaw =
+        (json['viewTree'] as Map<String, dynamic>?) ?? {};
+    final viewNodeNodes = <AppConfigNode>[];
+
+    for (final vnEntry in viewTreeRaw.entries) {
+      viewNodeNodes.add(_parseViewNode(vnEntry.value as Map<String, dynamic>));
+    }
+
     return AppConfigNode(
       label: rootCode,
       kind: AppConfigNodeKind.instance,
@@ -209,7 +238,89 @@ class AppConfigNode {
           parentId: rootId,
           children: rendererNodes,
         ),
+        AppConfigNode(
+          label: 'viewTree',
+          kind: AppConfigNodeKind.collection,
+          childTypeCode: 'ViewNode',
+          parentId: rootId,
+          children: viewNodeNodes,
+        ),
       ],
+    );
+  }
+
+  static AppConfigNode _parseViewNode(Map<String, dynamic> vn) {
+    final vnId = (vn['id'] as num?)?.toInt();
+    final vnCode = vn['code'] as String;
+    final vnType = vn['type'] as String?;
+    final vnLabel = vn['label'] as String?;
+
+    // Parse children (recursive)
+    final childrenRaw = (vn['children'] as List<dynamic>?) ?? [];
+    final childViewNodes = <AppConfigNode>[];
+    for (final child in childrenRaw) {
+      childViewNodes.add(_parseViewNode(child as Map<String, dynamic>));
+    }
+
+    // Parse tableColumns
+    final columnsRaw = (vn['tableColumns'] as List<dynamic>?) ?? [];
+    final columnNodes = <AppConfigNode>[];
+    for (final col in columnsRaw) {
+      final c = col as Map<String, dynamic>;
+      columnNodes.add(AppConfigNode(
+        label: c['code'] as String,
+        kind: AppConfigNodeKind.instance,
+        id: (c['id'] as num?)?.toInt(),
+        typeCode: 'TableColumn',
+        dataBinding: c['key'] as String?,
+        dataBindingNodeId: (c['keyNodeId'] as num?)?.toInt(),
+        viewNodeLabel: c['header'] as String?,
+        viewNodeLabelNodeId: (c['headerNodeId'] as num?)?.toInt(),
+        entityRendererRef: c['entityRendererRef'] as String?,
+        entityRendererRefNodeId: (c['entityRendererRefNodeId'] as num?)?.toInt(),
+        children: const [],
+      ));
+    }
+
+    // Build instance children list — always show collections so user can add items
+    final instanceChildren = <AppConfigNode>[];
+    // Always show 'children' collection for GROUP nodes (or any node that might nest)
+    if (vnType == 'GROUP' || childViewNodes.isNotEmpty) {
+      instanceChildren.add(AppConfigNode(
+        label: 'children',
+        kind: AppConfigNodeKind.collection,
+        childTypeCode: 'ViewNode',
+        parentId: vnId,
+        children: childViewNodes,
+      ));
+    }
+    // Always show 'tableColumns' collection for ENTITY_LIST nodes
+    if (vnType == 'ENTITY_LIST' || columnNodes.isNotEmpty) {
+      instanceChildren.add(AppConfigNode(
+        label: 'tableColumns',
+        kind: AppConfigNodeKind.collection,
+        childTypeCode: 'TableColumn',
+        parentId: vnId,
+        children: columnNodes,
+      ));
+    }
+
+    return AppConfigNode(
+      label: vnCode,
+      kind: AppConfigNodeKind.instance,
+      id: vnId,
+      typeCode: 'ViewNode',
+      typeValue: vnType,
+      typeNodeId: (vn['typeNodeId'] as num?)?.toInt(),
+      viewNodeLabel: vnLabel,
+      viewNodeLabelNodeId: (vn['labelNodeId'] as num?)?.toInt(),
+      entityProviderRef: vn['entityProviderRef'] as String?,
+      entityProviderRefNodeId: (vn['entityProviderRefNodeId'] as num?)?.toInt(),
+      dataFormRef: vn['dataFormRef'] as String?,
+      dataFormRefNodeId: (vn['dataFormRefNodeId'] as num?)?.toInt(),
+      viewContent: vn['content'] as String?,
+      viewContentNodeId: (vn['contentNodeId'] as num?)?.toInt(),
+      children: instanceChildren,
     );
   }
 

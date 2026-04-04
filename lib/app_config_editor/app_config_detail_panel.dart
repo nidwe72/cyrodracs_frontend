@@ -32,6 +32,12 @@ const _kEntityValues = [
   'CAMERA',
 ];
 
+const _kViewNodeTypes = [
+  'ENTITY_LIST',
+  'GROUP',
+  'STATIC_PAGE',
+];
+
 /// Detail panel for the AppConfigEditorView.
 ///
 /// * No node selected  → placeholder hint.
@@ -65,10 +71,17 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   late TextEditingController _codeCtrl;
   late TextEditingController _dataBindingCtrl;
   late TextEditingController _templateCtrl;
+  late TextEditingController _viewLabelCtrl;
+  late TextEditingController _viewContentCtrl;
+  late TextEditingController _tableColKeyCtrl;
+  late TextEditingController _tableColHeaderCtrl;
   String _selectedType = _kTypeValues.first;
   String? _selectedEntity;
   String? _selectedEntityProviderRef;
   String? _selectedEntityRendererRef;
+  String _selectedViewNodeType = _kViewNodeTypes.first;
+  String? _selectedDataFormRef;
+  String? _selectedTableColRendererRef;
   bool _loading = false;
   String? _error;
 
@@ -86,6 +99,11 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   int _templateCompletionIndex = -1;
   final FocusNode _templateFocus = FocusNode();
 
+  // TableColumn key auto-completion state
+  bool _showTableColKeyCompletions = false;
+  int _tableColKeyCompletionIndex = -1;
+  final FocusNode _tableColKeyFocus = FocusNode();
+
   @override
   void initState() {
     super.initState();
@@ -96,14 +114,27 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         text: n?.dataBinding ?? '');
     _templateCtrl = TextEditingController(
         text: n?.template ?? '');
+    _viewLabelCtrl = TextEditingController(
+        text: n?.viewNodeLabel ?? '');
+    _viewContentCtrl = TextEditingController(
+        text: n?.viewContent ?? '');
+    _tableColKeyCtrl = TextEditingController(
+        text: n?.dataBinding ?? '');
+    _tableColHeaderCtrl = TextEditingController(
+        text: n?.viewNodeLabel ?? '');
     _selectedType = n?.typeValue ?? _kTypeValues.first;
     _selectedEntity = n?.entityValue;
     _selectedEntityProviderRef = n?.entityProviderRef;
     _selectedEntityRendererRef = n?.entityRendererRef;
+    _selectedViewNodeType = n?.typeValue ?? _kViewNodeTypes.first;
+    _selectedDataFormRef = n?.dataFormRef;
+    _selectedTableColRendererRef = n?.entityRendererRef;
     _parentEntityType = _findParentEntityType();
     final shouldFetchCompletions = _parentEntityType != null && n != null
         && (n.hasDataBindingField
-            || (n.isCollection && n.childTypeCode == 'DataFormElement'));
+            || n.isTableColumn
+            || (n.isCollection && n.childTypeCode == 'DataFormElement')
+            || (n.isCollection && n.childTypeCode == 'TableColumn'));
     if (shouldFetchCompletions) {
       _fetchCompletions();
     }
@@ -120,29 +151,33 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _dataBindingFocus.dispose();
     _templateCtrl.dispose();
     _templateFocus.dispose();
+    _viewLabelCtrl.dispose();
+    _viewContentCtrl.dispose();
+    _tableColKeyCtrl.dispose();
+    _tableColHeaderCtrl.dispose();
+    _tableColKeyFocus.dispose();
     super.dispose();
   }
 
-  /// Walks the root tree to find the DataForm parent of this node
-  /// and returns its entityValue (e.g. "CAMERA_PRODUCER").
+  /// Walks the root tree to find the entity type for this node.
   ///
-  /// Works for both:
-  /// - Instance nodes (DataFormElement) — finds the form containing this element
-  /// - Collection nodes (elements) — finds the form that owns this collection
+  /// Works for:
+  /// - DataFormElement instances — finds the parent DataForm's entityValue
+  /// - "elements" collections — finds the owning DataForm's entityValue
+  /// - TableColumn instances — finds the parent ViewNode's entityProvider → entityType
+  /// - "tableColumns" collections — finds the owning ViewNode's entityProvider → entityType
   String? _findParentEntityType() {
     final n = widget.node;
     final root = widget.root;
     if (n == null || root == null) return null;
 
+    // DataForm-based: DataFormElement or "elements" collection
     for (final child in root.children) {
       if (child.isCollection && child.label == 'dataForms') {
         for (final form in child.children) {
-          // For collection nodes: the "elements" collection's parentId
-          // points to the DataForm
           if (n.isCollection && n.label == 'elements' && n.parentId == form.id) {
             return form.entityValue;
           }
-          // For instance nodes: search elements inside the form
           if (n.hasDataBindingField) {
             for (final coll in form.children) {
               if (coll.isCollection && coll.label == 'elements') {
@@ -152,6 +187,73 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
               }
             }
           }
+        }
+      }
+    }
+
+    // ViewNode-based: TableColumn or "tableColumns" collection
+    // Find the parent ViewNode, get its entityProviderRef, then look up the provider's entityType
+    String? providerRef = _findParentViewNodeProviderRef();
+    if (providerRef != null) {
+      return _resolveProviderEntityType(providerRef);
+    }
+
+    return null;
+  }
+
+  /// Finds the entityProviderRef of the ViewNode that owns this TableColumn or tableColumns collection.
+  String? _findParentViewNodeProviderRef() {
+    final n = widget.node;
+    final root = widget.root;
+    if (n == null || root == null) return null;
+
+    // Search all ViewNodes (recursively)
+    String? result;
+    void searchViewNodes(List<AppConfigNode> nodes) {
+      for (final vn in nodes) {
+        if (vn.typeCode != 'ViewNode') continue;
+        // Check if this ViewNode owns the tableColumns collection
+        if (n.isCollection && n.label == 'tableColumns' && n.parentId == vn.id) {
+          result = vn.entityProviderRef;
+          return;
+        }
+        // Check if this ViewNode contains this TableColumn
+        if (n.isTableColumn) {
+          for (final col in vn.children) {
+            if (col.isCollection && col.label == 'tableColumns') {
+              for (final tc in col.children) {
+                if (tc.id == n.id) { result = vn.entityProviderRef; return; }
+              }
+            }
+          }
+        }
+        // Recurse into children
+        for (final child in vn.children) {
+          if (child.isCollection && child.label == 'children') {
+            searchViewNodes(child.children);
+            if (result != null) return;
+          }
+        }
+      }
+    }
+
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'viewTree') {
+        searchViewNodes(child.children);
+        if (result != null) return result;
+      }
+    }
+    return null;
+  }
+
+  /// Looks up an EntityProvider by code and returns its entityType value.
+  String? _resolveProviderEntityType(String providerCode) {
+    final root = widget.root;
+    if (root == null) return null;
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'entityProviders') {
+        for (final prov in child.children) {
+          if (prov.label == providerCode) return prov.entityValue;
         }
       }
     }
@@ -214,6 +316,21 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     return codes;
   }
 
+  /// Collects available DataForm codes from the root tree.
+  List<String> _dataFormCodes() {
+    final root = widget.root;
+    if (root == null) return [];
+    final codes = <String>[];
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'dataForms') {
+        for (final form in child.children) {
+          codes.add(form.label);
+        }
+      }
+    }
+    return codes;
+  }
+
   // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
@@ -257,6 +374,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     final isElement = col.childTypeCode == 'DataFormElement';
     final isProvider = col.childTypeCode == 'EntityProvider';
     final isRenderer = col.childTypeCode == 'EntityRenderer';
+    final isViewNode = col.childTypeCode == 'ViewNode';
+    final isTableColumn = col.childTypeCode == 'TableColumn';
     final showBinding = isElement && _parentEntityType != null;
     final showEntitySelectRefs = isElement && _selectedType == 'ENTITY_SELECT';
 
@@ -267,6 +386,10 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       title = 'Add EntityProvider';
     } else if (isRenderer) {
       title = 'Add EntityRenderer';
+    } else if (isViewNode) {
+      title = 'Add ViewNode';
+    } else if (isTableColumn) {
+      title = 'Add TableColumn';
     } else {
       title = 'Add DataForm';
     }
@@ -282,6 +405,30 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           if (isElement) ...[
             const SizedBox(height: 12),
             _typeDropdown(),
+          ],
+          if (isViewNode) ...[
+            const SizedBox(height: 12),
+            _viewNodeTypeDropdown(),
+            const SizedBox(height: 12),
+            _labelField(),
+            if (_selectedViewNodeType == 'ENTITY_LIST') ...[
+              const SizedBox(height: 12),
+              _entityProviderRefDropdown(),
+              const SizedBox(height: 12),
+              _dataFormRefDropdown(),
+            ],
+            if (_selectedViewNodeType == 'STATIC_PAGE') ...[
+              const SizedBox(height: 12),
+              _contentField(),
+            ],
+          ],
+          if (isTableColumn) ...[
+            const SizedBox(height: 12),
+            _tableColumnKeyField(),
+            const SizedBox(height: 12),
+            _tableColumnHeaderField(),
+            const SizedBox(height: 12),
+            _tableColumnRendererDropdown(),
           ],
           if (showBinding) ...[
             const SizedBox(height: 12),
@@ -420,6 +567,129 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         }
         return tree;
       });
+    } else if (col.childTypeCode == 'ViewNode') {
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.addNode(
+          parentObjectId: col.parentId,
+          typeCode: 'ViewNode',
+          code: code,
+        );
+        // Create child nodes for type, label, and refs
+        tree = await widget.service.fetchTree();
+        if (tree != null) {
+          // Find the newly created ViewNode
+          int? newId;
+          void searchNode(List<AppConfigNode> nodes) {
+            for (final n in nodes) {
+              if (n.isCollection && (n.label == 'viewTree' || n.label == 'children')) {
+                for (final vn in n.children) {
+                  if (vn.label == code && vn.id != null) { newId = vn.id; return; }
+                  for (final c in vn.children) { searchNode([c]); }
+                }
+              }
+              for (final c in n.children) { searchNode([c]); }
+            }
+          }
+          searchNode(tree.children);
+
+          if (newId != null) {
+            tree = await widget.service.addNode(
+              parentObjectId: newId,
+              typeCode: 'ViewNodeType',
+              code: '${code}_type',
+              enumValue: _selectedViewNodeType,
+            );
+            final label = _viewLabelCtrl.text.trim();
+            if (label.isNotEmpty) {
+              tree = await widget.service.addNode(
+                parentObjectId: newId,
+                typeCode: 'ViewNodeLabel',
+                code: label,
+              );
+            }
+            if (_selectedViewNodeType == 'ENTITY_LIST') {
+              if (_selectedEntityProviderRef != null && _selectedEntityProviderRef!.isNotEmpty) {
+                tree = await widget.service.addNode(
+                  parentObjectId: newId,
+                  typeCode: 'ViewNodeProviderRef',
+                  code: _selectedEntityProviderRef!,
+                );
+              }
+              if (_selectedDataFormRef != null && _selectedDataFormRef!.isNotEmpty) {
+                tree = await widget.service.addNode(
+                  parentObjectId: newId,
+                  typeCode: 'ViewNodeDataFormRef',
+                  code: _selectedDataFormRef!,
+                );
+              }
+            } else if (_selectedViewNodeType == 'STATIC_PAGE') {
+              final content = _viewContentCtrl.text.trim();
+              if (content.isNotEmpty) {
+                tree = await widget.service.addNode(
+                  parentObjectId: newId,
+                  typeCode: 'ViewNodeContent',
+                  code: content,
+                );
+              }
+            }
+          }
+        }
+        return tree;
+      });
+    } else if (col.childTypeCode == 'TableColumn') {
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.addNode(
+          parentObjectId: col.parentId,
+          typeCode: 'TableColumn',
+          code: code,
+        );
+        // Find the new column to add key/header children
+        tree = await widget.service.fetchTree();
+        // For simplicity, use fetchTree + search to find the new column's ID
+        // The column is a child of the ViewNode (col.parentId)
+        if (tree != null) {
+          // Re-fetch to get the ID — search all ViewNodes for tableColumns
+          int? colId;
+          void searchColumns(List<AppConfigNode> nodes) {
+            for (final n in nodes) {
+              if (n.isCollection && n.label == 'tableColumns') {
+                for (final c in n.children) {
+                  if (c.label == code) { colId = c.id; return; }
+                }
+              }
+              for (final c in n.children) { searchColumns([c]); }
+            }
+          }
+          searchColumns(tree.children);
+
+          if (colId != null) {
+            final key = _tableColKeyCtrl.text.trim();
+            if (key.isNotEmpty) {
+              tree = await widget.service.addNode(
+                parentObjectId: colId,
+                typeCode: 'TableColumnKey',
+                code: key,
+              );
+            }
+            final header = _tableColHeaderCtrl.text.trim();
+            if (header.isNotEmpty) {
+              tree = await widget.service.addNode(
+                parentObjectId: colId,
+                typeCode: 'TableColumnHeader',
+                code: header,
+              );
+            }
+            if (_selectedTableColRendererRef != null && _selectedTableColRendererRef!.isNotEmpty) {
+              tree = await widget.service.addNode(
+                parentObjectId: colId,
+                typeCode: 'TableColumnRendererRef',
+                code: _selectedTableColRendererRef!,
+              );
+            }
+          }
+        }
+        return tree;
+      });
     } else {
       await _run(() => widget.service.addNode(
             parentObjectId: col.parentId,
@@ -453,6 +723,30 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           if (n.hasTypeField) ...[
             const SizedBox(height: 12),
             _typeDropdown(),
+          ],
+          if (n.isViewNode) ...[
+            const SizedBox(height: 12),
+            _viewNodeTypeDropdown(),
+            const SizedBox(height: 12),
+            _labelField(),
+            if (_selectedViewNodeType == 'ENTITY_LIST') ...[
+              const SizedBox(height: 12),
+              _entityProviderRefDropdown(),
+              const SizedBox(height: 12),
+              _dataFormRefDropdown(),
+            ],
+            if (_selectedViewNodeType == 'STATIC_PAGE') ...[
+              const SizedBox(height: 12),
+              _contentField(),
+            ],
+          ],
+          if (n.isTableColumn) ...[
+            const SizedBox(height: 12),
+            _tableColumnKeyField(),
+            const SizedBox(height: 12),
+            _tableColumnHeaderField(),
+            const SizedBox(height: 12),
+            _tableColumnRendererDropdown(),
           ],
           if (n.hasDataBindingField && _parentEntityType != null) ...[
             const SizedBox(height: 12),
@@ -513,8 +807,30 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     final templateChanged = n.hasTemplateField
         && templateText != (n.template ?? '');
 
+    // ViewNode-specific change detection
+    final viewLabelChanged = n.isViewNode
+        && _viewLabelCtrl.text.trim() != (n.viewNodeLabel ?? '');
+    final viewNodeTypeChanged = n.isViewNode
+        && _selectedViewNodeType != (n.typeValue ?? '');
+    final dataFormRefChanged = n.isViewNode
+        && (_selectedDataFormRef ?? '') != (n.dataFormRef ?? '');
+    final viewProviderRefChanged = n.isViewNode
+        && (_selectedEntityProviderRef ?? '') != (n.entityProviderRef ?? '');
+    final viewContentChanged = n.isViewNode
+        && _viewContentCtrl.text.trim() != (n.viewContent ?? '');
+    // TableColumn-specific change detection
+    final tableColKeyChanged = n.isTableColumn
+        && _tableColKeyCtrl.text.trim() != (n.dataBinding ?? '');
+    final tableColHeaderChanged = n.isTableColumn
+        && _tableColHeaderCtrl.text.trim() != (n.viewNodeLabel ?? '');
+    final tableColRendererChanged = n.isTableColumn
+        && (_selectedTableColRendererRef ?? '') != (n.entityRendererRef ?? '');
+
     if (!codeChanged && !typeChanged && !entityChanged && !dataBindingChanged
-        && !providerRefChanged && !rendererRefChanged && !templateChanged) {
+        && !providerRefChanged && !rendererRefChanged && !templateChanged
+        && !viewLabelChanged && !viewNodeTypeChanged && !dataFormRefChanged
+        && !viewProviderRefChanged && !viewContentChanged
+        && !tableColKeyChanged && !tableColHeaderChanged && !tableColRendererChanged) {
       return;
     }
 
@@ -564,6 +880,112 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
                 ? (_selectedEntityRendererRef?.isEmpty ?? true ? null : _selectedEntityRendererRef)
                 : null,
           ));
+    } else if (n.isViewNode) {
+      await _run(() async {
+        AppConfigNode? tree;
+        if (codeChanged) {
+          tree = await widget.service.updateNode(n.id!, code: code);
+        }
+        // ViewNodeType
+        final vnTypeChanged = _selectedViewNodeType != (n.typeValue ?? '');
+        if (vnTypeChanged) {
+          if (n.typeNodeId != null) {
+            tree = await widget.service.updateNode(n.typeNodeId!, enumValue: _selectedViewNodeType);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ViewNodeType',
+              code: '${code}_type', enumValue: _selectedViewNodeType,
+            );
+          }
+        }
+        // Label
+        final labelText = _viewLabelCtrl.text.trim();
+        final labelChanged = labelText != (n.viewNodeLabel ?? '');
+        if (labelChanged) {
+          if (n.viewNodeLabelNodeId != null) {
+            tree = await widget.service.updateNode(n.viewNodeLabelNodeId!, code: labelText);
+          } else if (labelText.isNotEmpty) {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ViewNodeLabel', code: labelText,
+            );
+          }
+        }
+        // EntityProviderRef
+        final provRefChanged = _selectedEntityProviderRef != (n.entityProviderRef ?? '');
+        if (provRefChanged && _selectedEntityProviderRef != null && _selectedEntityProviderRef!.isNotEmpty) {
+          if (n.entityProviderRefNodeId != null) {
+            tree = await widget.service.updateNode(n.entityProviderRefNodeId!, code: _selectedEntityProviderRef!);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ViewNodeProviderRef', code: _selectedEntityProviderRef!,
+            );
+          }
+        }
+        // DataFormRef
+        final dfRefChanged = _selectedDataFormRef != (n.dataFormRef ?? '');
+        if (dfRefChanged && _selectedDataFormRef != null && _selectedDataFormRef!.isNotEmpty) {
+          if (n.dataFormRefNodeId != null) {
+            tree = await widget.service.updateNode(n.dataFormRefNodeId!, code: _selectedDataFormRef!);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ViewNodeDataFormRef', code: _selectedDataFormRef!,
+            );
+          }
+        }
+        // Content
+        final contentText = _viewContentCtrl.text.trim();
+        final contentChanged = contentText != (n.viewContent ?? '');
+        if (contentChanged && contentText.isNotEmpty) {
+          if (n.viewContentNodeId != null) {
+            tree = await widget.service.updateNode(n.viewContentNodeId!, code: contentText);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ViewNodeContent', code: contentText,
+            );
+          }
+        }
+        return tree;
+      });
+    } else if (n.isTableColumn) {
+      await _run(() async {
+        AppConfigNode? tree;
+        if (codeChanged) {
+          tree = await widget.service.updateNode(n.id!, code: code);
+        }
+        final keyText = _tableColKeyCtrl.text.trim();
+        final keyChanged = keyText != (n.dataBinding ?? '');
+        if (keyChanged && keyText.isNotEmpty) {
+          if (n.dataBindingNodeId != null) {
+            tree = await widget.service.updateNode(n.dataBindingNodeId!, code: keyText);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'TableColumnKey', code: keyText,
+            );
+          }
+        }
+        final headerText = _tableColHeaderCtrl.text.trim();
+        final headerChanged = headerText != (n.viewNodeLabel ?? '');
+        if (headerChanged && headerText.isNotEmpty) {
+          if (n.viewNodeLabelNodeId != null) {
+            tree = await widget.service.updateNode(n.viewNodeLabelNodeId!, code: headerText);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'TableColumnHeader', code: headerText,
+            );
+          }
+        }
+        final renRefChanged = _selectedTableColRendererRef != (n.entityRendererRef ?? '');
+        if (renRefChanged && _selectedTableColRendererRef != null && _selectedTableColRendererRef!.isNotEmpty) {
+          if (n.entityRendererRefNodeId != null) {
+            tree = await widget.service.updateNode(n.entityRendererRefNodeId!, code: _selectedTableColRendererRef!);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'TableColumnRendererRef', code: _selectedTableColRendererRef!,
+            );
+          }
+        }
+        return tree;
+      });
     } else {
       await _run(() => widget.service.updateNode(n.id!, code: code));
     }
@@ -1132,6 +1554,266 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           );
         },
       ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // ViewNode-specific fields
+  // ---------------------------------------------------------------------------
+
+  Widget _viewNodeTypeDropdown() {
+    final value = _kViewNodeTypes.contains(_selectedViewNodeType)
+        ? _selectedViewNodeType
+        : _kViewNodeTypes.first;
+    return DropdownButtonFormField<String>(
+      value: value,
+      decoration: const InputDecoration(
+        labelText: 'View Node Type',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _kViewNodeTypes
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) setState(() => _selectedViewNodeType = v);
+      },
+    );
+  }
+
+  Widget _labelField() => TextField(
+        controller: _viewLabelCtrl,
+        decoration: const InputDecoration(
+          labelText: 'Label',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+      );
+
+  Widget _dataFormRefDropdown() {
+    final codes = _dataFormCodes();
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none)')),
+      ...codes.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: codes.contains(_selectedDataFormRef) ? _selectedDataFormRef : null,
+      decoration: const InputDecoration(
+        labelText: 'Data Form',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedDataFormRef = v),
+    );
+  }
+
+  Widget _contentField() => TextField(
+        controller: _viewContentCtrl,
+        decoration: const InputDecoration(
+          labelText: 'Content',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+        maxLines: 3,
+      );
+
+  // ---------------------------------------------------------------------------
+  // TableColumn-specific fields
+  // ---------------------------------------------------------------------------
+
+  List<BindingCompletion> _filteredTableColKeyCompletions() {
+    final filter = _tableColKeyCtrl.text.toLowerCase();
+    return _completions.where((c) {
+      if (filter.isEmpty) return true;
+      final getterName =
+          'get${c.segment[0].toUpperCase()}${c.segment.substring(1)}';
+      return c.segment.toLowerCase().contains(filter) ||
+          getterName.toLowerCase().contains(filter);
+    }).toList();
+  }
+
+  void _acceptTableColKeyCompletion(BindingCompletion c) {
+    _tableColKeyCtrl.text = c.segment;
+    _tableColKeyCtrl.selection = TextSelection.collapsed(
+        offset: _tableColKeyCtrl.text.length);
+    setState(() {
+      _showTableColKeyCompletions = false;
+      _tableColKeyCompletionIndex = -1;
+    });
+  }
+
+  KeyEventResult _onTableColKeyKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (!_showTableColKeyCompletions || _completions.isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    final filtered = _filteredTableColKeyCompletions();
+    if (filtered.isEmpty) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      setState(() {
+        _tableColKeyCompletionIndex = (_tableColKeyCompletionIndex + 1).clamp(0, filtered.length - 1);
+      });
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(() {
+        _tableColKeyCompletionIndex = (_tableColKeyCompletionIndex - 1).clamp(0, filtered.length - 1);
+      });
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.tab) {
+      if (_tableColKeyCompletionIndex >= 0 && _tableColKeyCompletionIndex < filtered.length) {
+        _acceptTableColKeyCompletion(filtered[_tableColKeyCompletionIndex]);
+        return KeyEventResult.handled;
+      }
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      setState(() {
+        _showTableColKeyCompletions = false;
+        _tableColKeyCompletionIndex = -1;
+      });
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Widget _tableColumnKeyField() {
+    final entityLabel = _completionEntityLabel ?? _parentEntityType ?? '';
+    final hasCompletions = _completions.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Focus(
+          onKeyEvent: hasCompletions ? _onTableColKeyKey : null,
+          child: TextField(
+            controller: _tableColKeyCtrl,
+            focusNode: _tableColKeyFocus,
+            decoration: InputDecoration(
+              labelText: 'Key (entity attribute)',
+              border: const OutlineInputBorder(),
+              isDense: true,
+              prefixText: hasCompletions ? '$entityLabel.' : null,
+              prefixStyle: const TextStyle(
+                  color: Colors.grey, fontWeight: FontWeight.w500),
+            ),
+            onChanged: (value) {
+              setState(() {
+                _showTableColKeyCompletions = true;
+                _tableColKeyCompletionIndex = -1;
+              });
+            },
+            onTap: () {
+              if (hasCompletions) {
+                setState(() => _showTableColKeyCompletions = true);
+              }
+            },
+          ),
+        ),
+        if (_showTableColKeyCompletions && _completions.isNotEmpty)
+          _buildTableColKeyCompletionList(),
+      ],
+    );
+  }
+
+  Widget _buildTableColKeyCompletionList() {
+    final filtered = _filteredTableColKeyCompletions();
+    if (filtered.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      constraints: const BoxConstraints(maxHeight: 180),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        itemCount: filtered.length,
+        itemExtent: 36,
+        itemBuilder: (context, i) {
+          final c = filtered[i];
+          final getterName =
+              'get${c.segment[0].toUpperCase()}${c.segment.substring(1)}';
+          final isHighlighted = i == _tableColKeyCompletionIndex;
+
+          return InkWell(
+            onTap: () => _acceptTableColKeyCompletion(c),
+            child: Container(
+              color: isHighlighted ? Colors.blue.shade50 : null,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  Icon(
+                    c.leaf ? Icons.text_fields : Icons.link,
+                    size: 14,
+                    color: isHighlighted ? Colors.blue : Colors.grey,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      getterName,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        fontWeight:
+                            isHighlighted ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    c.javaType,
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _tableColumnHeaderField() => TextField(
+        controller: _tableColHeaderCtrl,
+        decoration: const InputDecoration(
+          labelText: 'Header (display text)',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+      );
+
+  Widget _tableColumnRendererDropdown() {
+    final codes = _entityRendererCodes();
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none)')),
+      ...codes.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: codes.contains(_selectedTableColRendererRef) ? _selectedTableColRendererRef : null,
+      decoration: const InputDecoration(
+        labelText: 'Renderer (for relationship columns)',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedTableColRendererRef = v),
     );
   }
 

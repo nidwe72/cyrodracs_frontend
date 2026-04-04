@@ -15,11 +15,11 @@ String _toCamelCase(String screaming) {
       parts.skip(1).map((p) => p[0].toUpperCase() + p.substring(1)).join();
 }
 
-DataForm? _buildDataFormForEntity(AppConfigNode root, String entityValue) {
+DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
   for (final child in root.children) {
     if (child.isCollection && child.label == 'dataForms') {
       for (final formNode in child.children) {
-        if (formNode.entityValue == entityValue) {
+        if (formNode.label == dataFormCode) {
           final elements = <DataFormElement>[];
           for (final c in formNode.children) {
             if (c.isCollection && c.label == 'elements') {
@@ -53,18 +53,24 @@ DataForm? _buildDataFormForEntity(AppConfigNode root, String entityValue) {
   return null;
 }
 
-/// Describes an entity type shown in the App tree.
-class _EntityDef {
+/// A resolved ViewNode from the AppConfig tree used for navigation.
+class _ViewDef {
+  final String code;
   final String label;
-  final String apiPath;
-  final String entityTypeValue;
+  final String type; // ENTITY_LIST, GROUP, STATIC_PAGE
+  final String? dataFormRef;
+  final String? content;
   final List<_ColDef> columns;
+  final List<_ViewDef> children;
 
-  const _EntityDef({
+  const _ViewDef({
+    required this.code,
     required this.label,
-    required this.apiPath,
-    required this.entityTypeValue,
-    required this.columns,
+    required this.type,
+    this.dataFormRef,
+    this.content,
+    this.columns = const [],
+    this.children = const [],
   });
 }
 
@@ -74,38 +80,43 @@ class _ColDef {
   const _ColDef(this.header, this.key);
 }
 
-const _entityDefs = [
-  _EntityDef(
-    label: 'CameraProducers',
-    apiPath: '/api/camera-producers',
-    entityTypeValue: 'CAMERA_PRODUCER',
-    columns: [
-      _ColDef('ID', 'id'),
-      _ColDef('Name', 'name'),
-      _ColDef('Foundation', 'foundationYear'),
-      _ColDef('Shutdown', 'shutdownYear'),
-    ],
-  ),
-  _EntityDef(
-    label: 'CameraLensMounts',
-    apiPath: '/api/camera-lens-mounts',
-    entityTypeValue: 'CAMERA_LENS_MOUNT',
-    columns: [
-      _ColDef('ID', 'id'),
-      _ColDef('Name', 'name'),
-    ],
-  ),
-  _EntityDef(
-    label: 'Cameras',
-    apiPath: '/api/cameras',
-    entityTypeValue: 'CAMERA',
-    columns: [
-      _ColDef('ID', 'id'),
-      _ColDef('Name', 'name'),
-      _ColDef('Release Year', 'releaseYear'),
-    ],
-  ),
-];
+List<_ViewDef> _buildViewDefs(AppConfigNode root) {
+  for (final child in root.children) {
+    if (child.isCollection && child.label == 'viewTree') {
+      return child.children.map(_buildViewDef).toList();
+    }
+  }
+  return [];
+}
+
+_ViewDef _buildViewDef(AppConfigNode node) {
+  final columns = <_ColDef>[];
+  final children = <_ViewDef>[];
+
+  for (final child in node.children) {
+    if (child.isCollection && child.label == 'tableColumns') {
+      for (final col in child.children) {
+        final key = col.dataBinding ?? col.label;
+        final header = col.viewNodeLabel ?? col.label;
+        columns.add(_ColDef(header, key));
+      }
+    } else if (child.isCollection && child.label == 'children') {
+      for (final childNode in child.children) {
+        children.add(_buildViewDef(childNode));
+      }
+    }
+  }
+
+  return _ViewDef(
+    code: node.label,
+    label: node.viewNodeLabel ?? node.label,
+    type: node.typeValue ?? 'GROUP',
+    dataFormRef: node.dataFormRef,
+    content: node.viewContent,
+    columns: columns,
+    children: children,
+  );
+}
 
 class AppView extends StatefulWidget {
   const AppView({super.key});
@@ -114,14 +125,15 @@ class AppView extends StatefulWidget {
   State<AppView> createState() => _AppViewState();
 }
 
-enum _DetailMode { table, edit }
+enum _DetailMode { table, edit, staticPage }
 
 class _AppViewState extends State<AppView> {
   final _service = AppConfigService();
 
-  _EntityDef? _selectedDef;
+  List<_ViewDef> _viewDefs = [];
+  _ViewDef? _selectedDef;
   List<Map<String, dynamic>> _entities = [];
-  bool _loading = false;
+  bool _loading = true;
   String? _error;
 
   _DetailMode _mode = _DetailMode.table;
@@ -129,7 +141,29 @@ class _AppViewState extends State<AppView> {
   DataForm? _editForm;
   Map<String, dynamic>? _editValues;
 
-  Future<void> _fetchEntities(_EntityDef def) async {
+  @override
+  void initState() {
+    super.initState();
+    _loadViewTree();
+  }
+
+  Future<void> _loadViewTree() async {
+    try {
+      final root = await _service.fetchTree();
+      if (root == null) {
+        setState(() { _error = 'AppConfig not loaded'; _loading = false; });
+        return;
+      }
+      setState(() {
+        _viewDefs = _buildViewDefs(root);
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _fetchEntities(_ViewDef def) async {
     setState(() {
       _selectedDef = def;
       _loading = true;
@@ -138,7 +172,7 @@ class _AppViewState extends State<AppView> {
     });
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:8080${def.apiPath}'),
+        Uri.parse('http://localhost:8080/api/view/${def.code}/data'),
       );
       if (response.statusCode == 200) {
         final list = jsonDecode(response.body) as List<dynamic>;
@@ -164,7 +198,7 @@ class _AppViewState extends State<AppView> {
     final def = _selectedDef!;
     try {
       final response = await http.delete(
-        Uri.parse('http://localhost:8080${def.apiPath}/$id'),
+        Uri.parse('http://localhost:8080/api/view/${def.code}/$id'),
       );
       if (response.statusCode == 200) {
         _fetchEntities(def);
@@ -178,6 +212,10 @@ class _AppViewState extends State<AppView> {
 
   Future<void> _editEntity(int entityId) async {
     final def = _selectedDef!;
+    if (def.dataFormRef == null) {
+      setState(() => _error = 'No dataForm configured for ${def.label}');
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -188,9 +226,9 @@ class _AppViewState extends State<AppView> {
         setState(() { _error = 'AppConfig not loaded'; _loading = false; });
         return;
       }
-      final form = _buildDataFormForEntity(root, def.entityTypeValue);
+      final form = _buildDataFormByCode(root, def.dataFormRef!);
       if (form == null) {
-        setState(() { _error = 'No DataForm configured for ${def.entityTypeValue}'; _loading = false; });
+        setState(() { _error = 'DataForm "${def.dataFormRef}" not found'; _loading = false; });
         return;
       }
 
@@ -218,6 +256,10 @@ class _AppViewState extends State<AppView> {
 
   Future<void> _addEntity() async {
     final def = _selectedDef!;
+    if (def.dataFormRef == null) {
+      setState(() => _error = 'No dataForm configured for ${def.label}');
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -228,9 +270,9 @@ class _AppViewState extends State<AppView> {
         setState(() { _error = 'AppConfig not loaded'; _loading = false; });
         return;
       }
-      final form = _buildDataFormForEntity(root, def.entityTypeValue);
+      final form = _buildDataFormByCode(root, def.dataFormRef!);
       if (form == null) {
-        setState(() { _error = 'No DataForm configured for ${def.entityTypeValue}'; _loading = false; });
+        setState(() { _error = 'DataForm "${def.dataFormRef}" not found'; _loading = false; });
         return;
       }
       setState(() {
@@ -245,12 +287,28 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  void _onNodeDoubleClick(_EntityDef def) {
-    _fetchEntities(def);
+  void _onNodeActivated(_ViewDef def) {
+    if (def.type == 'ENTITY_LIST') {
+      _fetchEntities(def);
+    } else if (def.type == 'STATIC_PAGE') {
+      setState(() {
+        _selectedDef = def;
+        _mode = _DetailMode.staticPage;
+        _loading = false;
+        _error = null;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading && _viewDefs.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _viewDefs.isEmpty) {
+      return Center(child: Text('Error: $_error', style: const TextStyle(color: Colors.red)));
+    }
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -273,12 +331,25 @@ class _AppViewState extends State<AppView> {
   Widget _buildTree() {
     return ListView(
       padding: const EdgeInsets.all(8),
-      children: _entityDefs.map((def) => _TreeNode(
-        label: def.label,
-        selected: _selectedDef == def,
-        onDoubleTap: () => _onNodeDoubleClick(def),
-      )).toList(),
+      children: _buildTreeNodes(_viewDefs, 0),
     );
+  }
+
+  List<Widget> _buildTreeNodes(List<_ViewDef> defs, int depth) {
+    final widgets = <Widget>[];
+    for (final def in defs) {
+      widgets.add(_TreeNode(
+        label: def.label,
+        depth: depth,
+        isGroup: def.type == 'GROUP',
+        selected: _selectedDef?.code == def.code,
+        onDoubleTap: () => _onNodeActivated(def),
+      ));
+      if (def.type == 'GROUP' && def.children.isNotEmpty) {
+        widgets.addAll(_buildTreeNodes(def.children, depth + 1));
+      }
+    }
+    return widgets;
   }
 
   Widget _buildDetailPanel() {
@@ -301,6 +372,10 @@ class _AppViewState extends State<AppView> {
 
     if (_mode == _DetailMode.edit && _editForm != null) {
       return _buildEditView();
+    }
+
+    if (_mode == _DetailMode.staticPage) {
+      return _buildStaticPage();
     }
 
     return _buildEntityTable();
@@ -333,7 +408,7 @@ class _AppViewState extends State<AppView> {
         const Divider(height: 1),
         Expanded(
           child: FormRendererView(
-            key: ValueKey('edit-${def.label}-${_editEntityId ?? 'new'}'),
+            key: ValueKey('edit-${def.code}-${_editEntityId ?? 'new'}'),
             form: _editForm!,
             entityId: _editEntityId,
             initialValues: _editValues,
@@ -341,6 +416,22 @@ class _AppViewState extends State<AppView> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildStaticPage() {
+    final def = _selectedDef!;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(def.label, style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 16),
+          Text(def.content ?? '(No content configured)',
+              style: const TextStyle(color: Colors.grey)),
+        ],
+      ),
     );
   }
 
@@ -355,11 +446,12 @@ class _AppViewState extends State<AppView> {
             children: [
               Text(def.label, style: Theme.of(context).textTheme.titleMedium),
               const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.add, size: 18),
-                tooltip: 'Add',
-                onPressed: _addEntity,
-              ),
+              if (def.dataFormRef != null)
+                IconButton(
+                  icon: const Icon(Icons.add, size: 18),
+                  tooltip: 'Add',
+                  onPressed: _addEntity,
+                ),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 18),
                 tooltip: 'Reload',
@@ -386,11 +478,12 @@ class _AppViewState extends State<AppView> {
                     DataCell(Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit, size: 18),
-                          tooltip: 'Edit',
-                          onPressed: () => _editEntity(id),
-                        ),
+                        if (def.dataFormRef != null)
+                          IconButton(
+                            icon: const Icon(Icons.edit, size: 18),
+                            tooltip: 'Edit',
+                            onPressed: () => _editEntity(id),
+                          ),
                         IconButton(
                           icon: const Icon(Icons.delete, size: 18, color: Colors.red),
                           tooltip: 'Delete',
@@ -407,7 +500,7 @@ class _AppViewState extends State<AppView> {
     );
   }
 
-  Future<void> _confirmDelete(int id, String? name) async {
+  Future<void> _confirmDelete(int id, dynamic name) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -434,11 +527,15 @@ class _AppViewState extends State<AppView> {
 
 class _TreeNode extends StatelessWidget {
   final String label;
+  final int depth;
+  final bool isGroup;
   final bool selected;
   final VoidCallback onDoubleTap;
 
   const _TreeNode({
     required this.label,
+    required this.depth,
+    required this.isGroup,
     required this.selected,
     required this.onDoubleTap,
   });
@@ -448,14 +545,18 @@ class _TreeNode extends StatelessWidget {
     return GestureDetector(
       onDoubleTap: onDoubleTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: EdgeInsets.only(left: 8.0 + depth * 16.0, top: 6, bottom: 6, right: 8),
         decoration: BoxDecoration(
           color: selected ? Colors.blue.shade50 : null,
           borderRadius: BorderRadius.circular(4),
         ),
         child: Row(
           children: [
-            const Icon(Icons.folder, size: 18, color: Colors.grey),
+            Icon(
+              isGroup ? Icons.folder : Icons.list_alt,
+              size: 18,
+              color: Colors.grey,
+            ),
             const SizedBox(width: 8),
             Text(label),
           ],
