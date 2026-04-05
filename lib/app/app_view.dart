@@ -141,6 +141,12 @@ class _AppViewState extends State<AppView> {
   DataForm? _editForm;
   Map<String, dynamic>? _editValues;
 
+  // Pagination state
+  int _page = 0;
+  final int _pageSize = 10;
+  int _totalCount = 0;
+  int _totalPages = 0;
+
   @override
   void initState() {
     super.initState();
@@ -163,7 +169,7 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  Future<void> _fetchEntities(_ViewDef def) async {
+  Future<void> _fetchEntities(_ViewDef def, {int page = 0}) async {
     setState(() {
       _selectedDef = def;
       _loading = true;
@@ -172,12 +178,18 @@ class _AppViewState extends State<AppView> {
     });
     try {
       final response = await http.get(
-        Uri.parse('http://localhost:8080/api/view/${def.code}/data'),
+        Uri.parse(
+          'http://localhost:8080/api/view/${def.code}/data?page=$page&size=$_pageSize',
+        ),
       );
       if (response.statusCode == 200) {
-        final list = jsonDecode(response.body) as List<dynamic>;
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final items = (body['items'] as List<dynamic>).cast<Map<String, dynamic>>();
         setState(() {
-          _entities = list.cast<Map<String, dynamic>>();
+          _entities = items;
+          _page = body['page'] as int;
+          _totalCount = body['totalCount'] as int;
+          _totalPages = body['totalPages'] as int;
           _loading = false;
         });
       } else {
@@ -201,7 +213,7 @@ class _AppViewState extends State<AppView> {
         Uri.parse('http://localhost:8080/api/view/${def.code}/$id'),
       );
       if (response.statusCode == 200) {
-        _fetchEntities(def);
+        _fetchEntities(def, page: _page);
       } else {
         setState(() => _error = 'Delete failed: HTTP ${response.statusCode}');
       }
@@ -394,7 +406,7 @@ class _AppViewState extends State<AppView> {
               IconButton(
                 icon: const Icon(Icons.arrow_back, size: 18),
                 tooltip: 'Back to list',
-                onPressed: () => _fetchEntities(def),
+                onPressed: () => _fetchEntities(def, page: _page),
               ),
               const SizedBox(width: 8),
               Text(
@@ -412,7 +424,7 @@ class _AppViewState extends State<AppView> {
             form: _editForm!,
             entityId: _editEntityId,
             initialValues: _editValues,
-            onSaved: () => _fetchEntities(def),
+            onSaved: () => _fetchEntities(def, page: _page),
           ),
         ),
       ],
@@ -445,6 +457,9 @@ class _AppViewState extends State<AppView> {
           Row(
             children: [
               Text(def.label, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(width: 8),
+              Text('($_totalCount total)',
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
               const Spacer(),
               if (def.dataFormRef != null)
                 IconButton(
@@ -455,7 +470,7 @@ class _AppViewState extends State<AppView> {
               IconButton(
                 icon: const Icon(Icons.refresh, size: 18),
                 tooltip: 'Reload',
-                onPressed: () => _fetchEntities(def),
+                onPressed: () => _fetchEntities(def, page: _page),
               ),
             ],
           ),
@@ -495,6 +510,44 @@ class _AppViewState extends State<AppView> {
                 }).toList(),
               ),
             ),
+          if (_totalPages > 1) ...[
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.first_page, size: 20),
+                  tooltip: 'First page',
+                  onPressed: _page > 0
+                      ? () => _fetchEntities(def, page: 0)
+                      : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_left, size: 20),
+                  tooltip: 'Previous page',
+                  onPressed: _page > 0
+                      ? () => _fetchEntities(def, page: _page - 1)
+                      : null,
+                ),
+                Text('Page ${_page + 1} of $_totalPages',
+                    style: const TextStyle(fontSize: 13)),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right, size: 20),
+                  tooltip: 'Next page',
+                  onPressed: _page < _totalPages - 1
+                      ? () => _fetchEntities(def, page: _page + 1)
+                      : null,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.last_page, size: 20),
+                  tooltip: 'Last page',
+                  onPressed: _page < _totalPages - 1
+                      ? () => _fetchEntities(def, page: _totalPages - 1)
+                      : null,
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
