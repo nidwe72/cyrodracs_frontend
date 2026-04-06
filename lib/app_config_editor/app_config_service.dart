@@ -479,15 +479,59 @@ class CompileCheckWarning {
   }
 }
 
+class MethodInfo {
+  final String name;
+  final String returnType;
+  final bool returnsResolvable;
+
+  const MethodInfo({
+    required this.name,
+    required this.returnType,
+    required this.returnsResolvable,
+  });
+
+  factory MethodInfo.fromJson(Map<String, dynamic> json) {
+    return MethodInfo(
+      name: json['name'] as String,
+      returnType: json['returnType'] as String,
+      returnsResolvable: json['returnsResolvable'] as bool? ?? false,
+    );
+  }
+}
+
+class TypeContext {
+  final Map<String, String> variables;
+  final Map<String, List<MethodInfo>> methods;
+
+  const TypeContext({required this.variables, required this.methods});
+
+  factory TypeContext.fromJson(Map<String, dynamic> json) {
+    final vars = (json['variables'] as Map<String, dynamic>?)
+        ?.map((k, v) => MapEntry(k, v as String)) ?? {};
+    final meths = <String, List<MethodInfo>>{};
+    final rawMethods = json['methods'] as Map<String, dynamic>?;
+    if (rawMethods != null) {
+      for (final entry in rawMethods.entries) {
+        meths[entry.key] = (entry.value as List<dynamic>)
+            .map((m) => MethodInfo.fromJson(m as Map<String, dynamic>))
+            .toList();
+      }
+    }
+    return TypeContext(variables: vars, methods: meths);
+  }
+}
+
 class CompileCheckResult {
   final bool valid;
   final List<CompileCheckError> errors;
   final List<CompileCheckWarning> warnings;
+  final TypeContext? typeContext;
 
   const CompileCheckResult({
     required this.valid,
     required this.errors,
     required this.warnings,
+    this.typeContext,
   });
 
   factory CompileCheckResult.fromJson(Map<String, dynamic> json) {
@@ -499,6 +543,9 @@ class CompileCheckResult {
       warnings: ((json['warnings'] as List<dynamic>?) ?? [])
           .map((w) => CompileCheckWarning.fromJson(w as Map<String, dynamic>))
           .toList(),
+      typeContext: json['typeContext'] != null
+          ? TypeContext.fromJson(json['typeContext'] as Map<String, dynamic>)
+          : null,
     );
   }
 }

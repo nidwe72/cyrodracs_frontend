@@ -113,12 +113,17 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
   List<CompileCheckWarning> _warnings = [];
   bool _checking = false;
   Timer? _debounceTimer;
+  late _InjectablePromptsBuilder _promptsBuilder;
 
   @override
   void initState() {
     super.initState();
     _codeController = CodeLineEditingController.fromText(widget.initialSource);
     _codeController.addListener(_onCodeChanged);
+    _promptsBuilder = _InjectablePromptsBuilder(
+      controller: _codeController,
+      baseClass: widget.baseClass,
+    );
   }
 
   @override
@@ -153,6 +158,7 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
       setState(() {
         _errors = result.errors;
         _warnings = result.warnings;
+        _promptsBuilder.typeContext = result.typeContext;
         _checking = false;
       });
     } catch (e) {
@@ -176,13 +182,6 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
     Navigator.pop(context, null);
   }
 
-  List<CodePrompt> get _directPrompts {
-    final prompts = <CodePrompt>[..._kDirectPrompts];
-    if (widget.baseClass == 'FILTER') {
-      prompts.addAll(_kFilterPrompts);
-    }
-    return prompts;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -240,11 +239,7 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
                       onSelected: onSelected,
                     );
                   },
-                  promptsBuilder: DefaultCodeAutocompletePromptsBuilder(
-                    language: langJava,
-                    directPrompts: _directPrompts,
-                    relatedPrompts: _kRelatedPrompts,
-                  ),
+                  promptsBuilder: _promptsBuilder,
                   child: CodeEditor(
                     controller: _codeController,
                     style: CodeEditorStyle(
@@ -289,7 +284,7 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
             // Error/warning panel
             if (_errors.isNotEmpty || _warnings.isNotEmpty)
               Container(
-                constraints: const BoxConstraints(maxHeight: 120),
+                constraints: const BoxConstraints(maxHeight: 140),
                 decoration: BoxDecoration(
                   border: Border(bottom: BorderSide(color: borderColor)),
                 ),
@@ -298,6 +293,18 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (_errors.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            'Autocomplete may be limited until errors are fixed.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade500,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ),
                       for (final err in _errors)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 2),
@@ -602,5 +609,199 @@ class _ErrorGutterRenderObject extends RenderBox {
     }
 
     canvas.restore();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Custom prompts builder with server-backed type resolution
+// ---------------------------------------------------------------------------
+
+class _InjectablePromptsBuilder implements CodeAutocompletePromptsBuilder {
+  final CodeLineEditingController controller;
+  final String baseClass;
+  TypeContext? typeContext;
+
+  /// Static prompts (always available, no server needed).
+  late final List<CodePrompt> _staticPrompts;
+  late final Map<String, List<CodePrompt>> _staticRelated;
+
+  _InjectablePromptsBuilder({
+    required this.controller,
+    required this.baseClass,
+  }) {
+    _staticPrompts = [
+      ..._kDirectPrompts,
+      if (baseClass == 'FILTER') ..._kFilterPrompts,
+    ];
+    _staticRelated = _kRelatedPrompts;
+  }
+
+  @override
+  CodeAutocompleteEditingValue? build(
+      BuildContext context, CodeLine codeLine, CodeLineSelection selection) {
+    final String text = codeLine.text;
+    final String before = text.substring(0, selection.extentOffset);
+    if (before.isEmpty) return null;
+
+    // Check if we're after a dot → resolve the chain
+    if (before.endsWith('.')) {
+      final prompts = _resolveChain(before.substring(0, before.length - 1));
+      if (prompts != null && prompts.isNotEmpty) {
+        return CodeAutocompleteEditingValue(
+            input: '', prompts: prompts, index: 0);
+      }
+      return null;
+    }
+
+    // Check if we're typing after a dot (e.g., "p.get")
+    final dotIdx = before.lastIndexOf('.');
+    if (dotIdx > 0) {
+      final target = before.substring(0, dotIdx);
+      final input = before.substring(dotIdx + 1);
+      if (input.isEmpty) return null;
+      final prompts = _resolveChain(target);
+      if (prompts != null) {
+        final filtered = prompts.where((p) => p.match(input)).toList();
+        if (filtered.isNotEmpty) {
+          return CodeAutocompleteEditingValue(
+              input: input, prompts: filtered, index: 0);
+        }
+      }
+      return null;
+    }
+
+    // No dot — offer static keyword/direct prompts
+    final input = _extractWord(before);
+    if (input.isEmpty) return null;
+
+    final prompts = _staticPrompts.where((p) => p.match(input)).toList();
+    if (prompts.isEmpty) return null;
+    return CodeAutocompleteEditingValue(
+        input: input, prompts: prompts, index: 0);
+  }
+
+  /// Resolves a chain like "p" or "p.getProducer()" to a list of method prompts.
+  List<CodePrompt>? _resolveChain(String expression) {
+    // Extract the chain segments: "p.getProducer().getName" → ["p", "getProducer()", "getName"]
+    final segments = _parseChain(expression.trim());
+    if (segments.isEmpty) return null;
+
+    // First, check static related prompts (e.g., "FilterOperator", "getInjectionContext()")
+    if (segments.length == 1) {
+      final staticResult = _staticRelated[segments.first];
+      if (staticResult != null) return staticResult;
+    }
+
+    // Resolve the first segment to a type
+    String? currentType = _resolveFirstSegment(segments.first);
+    if (currentType == null) return null;
+
+    // Walk the chain, resolving each method's return type
+    for (int i = 1; i < segments.length; i++) {
+      final methodName = segments[i].replaceAll(RegExp(r'\(.*\)$'), '');
+      final methods = typeContext?.methods[currentType];
+      if (methods == null) return null;
+
+      final method = methods.where((m) =>
+          m.name.startsWith('$methodName(')).firstOrNull;
+      if (method == null) return null;
+      currentType = method.returnType;
+    }
+
+    // Return prompts for the resolved type
+    return _buildPromptsForType(currentType);
+  }
+
+  /// Resolves the first segment of a chain to a type name.
+  String? _resolveFirstSegment(String segment) {
+    // Check if it's a variable name → look up in typeContext
+    final tc = typeContext;
+    if (tc != null) {
+      // Direct variable lookup (e.g., "p" → "CameraProducer")
+      final varType = tc.variables[segment];
+      if (varType != null) return varType;
+
+      // Method call lookup (e.g., "getHelper()" → return type)
+      final asCall = segment.contains('(') ? segment : '$segment()';
+      final callType = tc.variables[asCall];
+      if (callType != null) return callType;
+    }
+
+    // Check if it's a class name directly (e.g., "CameraProducer")
+    if (tc != null && tc.methods.containsKey(segment)) {
+      return segment;
+    }
+
+    return null;
+  }
+
+  /// Builds CodePrompt list from the method map for a given type.
+  List<CodePrompt>? _buildPromptsForType(String? typeName) {
+    if (typeName == null) return null;
+    final methods = typeContext?.methods[typeName];
+    if (methods == null || methods.isEmpty) return null;
+
+    return methods.map((m) {
+      if (m.name.contains('(') && !m.name.endsWith('()')) {
+        // Method with parameters
+        final parenIdx = m.name.indexOf('(');
+        final word = m.name.substring(0, parenIdx);
+        return CodeFunctionPrompt(
+          word: word,
+          type: m.returnType,
+          parameters: {},
+        ) as CodePrompt;
+      }
+      // No-arg method or field
+      final word = m.name.replaceAll('()', '');
+      return CodeFieldPrompt(word: word, type: m.returnType) as CodePrompt;
+    }).toList();
+  }
+
+  /// Parses "p.getProducer().getName" into ["p", "getProducer()", "getName"]
+  List<String> _parseChain(String expr) {
+    final segments = <String>[];
+    final buffer = StringBuffer();
+    int parenDepth = 0;
+
+    for (int i = 0; i < expr.length; i++) {
+      final ch = expr[i];
+      if (ch == '(') {
+        parenDepth++;
+        buffer.write(ch);
+      } else if (ch == ')') {
+        parenDepth--;
+        buffer.write(ch);
+      } else if (ch == '.' && parenDepth == 0) {
+        if (buffer.isNotEmpty) {
+          segments.add(buffer.toString());
+          buffer.clear();
+        }
+      } else if (_isIdentChar(ch)) {
+        buffer.write(ch);
+      } else if (ch == ' ' || ch == '\t') {
+        // skip whitespace
+      } else {
+        // Non-identifier char (cast, operator, etc.) — reset
+        segments.clear();
+        buffer.clear();
+      }
+    }
+    if (buffer.isNotEmpty) segments.add(buffer.toString());
+    return segments;
+  }
+
+  /// Extracts the word being typed (walking backwards from end).
+  String _extractWord(String text) {
+    int i = text.length - 1;
+    while (i >= 0 && _isIdentChar(text[i])) {
+      i--;
+    }
+    return text.substring(i + 1);
+  }
+
+  bool _isIdentChar(String ch) {
+    final c = ch.codeUnitAt(0);
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
   }
 }
