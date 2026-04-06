@@ -234,6 +234,12 @@ class _FormRendererViewState extends State<FormRendererView> {
             onChanged: (v) => _values[e.key] = v,
             onSaved: (v) => _values[e.key] = v,
           ),
+        DataFormElementType.grid => Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('GRID: ${e.label ?? e.key} (not yet rendered)'),
+            ),
+          ),
       },
     );
   }

@@ -18,6 +18,7 @@ enum DataFormElementType {
   rating,
   datePickerYearMonth,
   entitySelect,
+  grid,
 }
 
 class DataFormElement {

@@ -28,6 +28,8 @@ class AppConfigNode {
   final int? entityRendererRefNodeId;
   final String? template;              // Mustache template on EntityRenderer
   final int? templateNodeId;
+  final String? filterInjectableRef;   // Expression code ref on EntityProvider
+  final int? filterInjectableRefNodeId;
 
   // ViewNode fields
   final String? viewNodeLabel;         // display label on ViewNode
@@ -61,6 +63,8 @@ class AppConfigNode {
     this.entityRendererRefNodeId,
     this.template,
     this.templateNodeId,
+    this.filterInjectableRef,
+    this.filterInjectableRefNodeId,
     this.viewNodeLabel,
     this.viewNodeLabelNodeId,
     this.dataFormRef,
@@ -103,6 +107,9 @@ class AppConfigNode {
 
   /// True for TableColumn nodes.
   bool get isTableColumn => typeCode == 'TableColumn';
+
+  /// True for Expression nodes.
+  bool get isExpression => typeCode == 'Expression';
 
   /// True for FilterNode nodes.
   bool get isFilterNode => typeCode == 'FilterNode';
@@ -226,6 +233,8 @@ class AppConfigNode {
         typeCode: 'EntityProvider',
         entityValue: prov['entityType'] as String?,
         entityNodeId: (prov['entityTypeNodeId'] as num?)?.toInt(),
+        filterInjectableRef: prov['filterInjectableRef'] as String?,
+        filterInjectableRefNodeId: (prov['filterInjectableRefNodeId'] as num?)?.toInt(),
         children: provChildren,
       ));
     }
@@ -257,6 +266,30 @@ class AppConfigNode {
 
     for (final vnEntry in viewTreeRaw.entries) {
       viewNodeNodes.add(_parseViewNode(vnEntry.value as Map<String, dynamic>));
+    }
+
+    // --- Expressions ---
+    final expressionsRaw =
+        (json['expressions'] as Map<String, dynamic>?) ?? {};
+    final expressionNodes = <AppConfigNode>[];
+
+    for (final exprEntry in expressionsRaw.entries) {
+      final expr = exprEntry.value as Map<String, dynamic>;
+      expressionNodes.add(AppConfigNode(
+        label: expr['code'] as String,
+        kind: AppConfigNodeKind.instance,
+        id: (expr['id'] as num?)?.toInt(),
+        typeCode: 'Expression',
+        typeValue: expr['type'] as String?,
+        typeNodeId: (expr['typeNodeId'] as num?)?.toInt(),
+        entityValue: expr['baseClass'] as String?,
+        entityNodeId: (expr['baseClassNodeId'] as num?)?.toInt(),
+        dataBinding: expr['expression'] as String?,
+        dataBindingNodeId: (expr['expressionNodeId'] as num?)?.toInt(),
+        template: expr['description'] as String?,
+        templateNodeId: (expr['descriptionNodeId'] as num?)?.toInt(),
+        children: const [],
+      ));
     }
 
     return AppConfigNode(
@@ -292,6 +325,13 @@ class AppConfigNode {
           childTypeCode: 'ViewNode',
           parentId: rootId,
           children: viewNodeNodes,
+        ),
+        AppConfigNode(
+          label: 'expressions',
+          kind: AppConfigNodeKind.collection,
+          childTypeCode: 'Expression',
+          parentId: rootId,
+          children: expressionNodes,
         ),
       ],
     );

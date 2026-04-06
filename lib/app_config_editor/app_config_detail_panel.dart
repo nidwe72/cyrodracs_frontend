@@ -24,11 +24,13 @@ const _kTypeValues = [
   'RATING',
   'DATE_PICKER__YEAR_MONTH',
   'ENTITY_SELECT',
+  'GRID',
 ];
 
 const _kEntityValues = [
   'CAMERA_PRODUCER',
   'CAMERA_LENS_MOUNT',
+  'CAMERA_LENS_MOUNT_2_CAMERA_PRODUCER',
   'CAMERA',
 ];
 
@@ -60,6 +62,21 @@ const _kFilterOperators = [
 const _kSortDirections = [
   'ASC',
   'DESC',
+];
+
+const _kExpressionTypes = [
+  'CONTEXT_PATH',
+  'SPEL',
+  'STATIC',
+  'INJECTABLE_SNIPPET',
+  'INJECTABLE_CLASS',
+];
+
+const _kInjectableBaseClasses = [
+  'SCALAR_VALUE',
+  'BOOLEAN_VALUE',
+  'LIST_VALUE',
+  'FILTER',
 ];
 
 /// Detail panel for the AppConfigEditorView.
@@ -103,6 +120,12 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   String? _selectedEntity;
   String? _selectedEntityProviderRef;
   String? _selectedEntityRendererRef;
+  String? _selectedFilterInjectableRef;
+  // Expression state
+  String _selectedExpressionType = _kExpressionTypes.first;
+  String _selectedInjectableBaseClass = _kInjectableBaseClasses.first;
+  late TextEditingController _expressionBodyCtrl;
+  late TextEditingController _expressionDescCtrl;
   String _selectedViewNodeType = _kViewNodeTypes.first;
   String? _selectedDataFormRef;
   String? _selectedTableColRendererRef;
@@ -158,6 +181,14 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _selectedEntity = n?.entityValue;
     _selectedEntityProviderRef = n?.entityProviderRef;
     _selectedEntityRendererRef = n?.entityRendererRef;
+    _selectedFilterInjectableRef = n?.filterInjectableRef;
+    // Expression
+    _selectedExpressionType = (n?.typeValue != null && _kExpressionTypes.contains(n!.typeValue))
+        ? n.typeValue! : _kExpressionTypes.first;
+    _selectedInjectableBaseClass = (n?.entityValue != null && _kInjectableBaseClasses.contains(n!.entityValue))
+        ? n.entityValue! : _kInjectableBaseClasses.first;
+    _expressionBodyCtrl = TextEditingController(text: n?.dataBinding ?? '');
+    _expressionDescCtrl = TextEditingController(text: n?.template ?? '');
     _selectedViewNodeType = n?.typeValue ?? _kViewNodeTypes.first;
     _selectedDataFormRef = n?.dataFormRef;
     _selectedTableColRendererRef = n?.entityRendererRef;
@@ -405,6 +436,21 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       if (child.isCollection && child.label == 'entityRenderers') {
         for (final ren in child.children) {
           codes.add(ren.label);
+        }
+      }
+    }
+    return codes;
+  }
+
+  /// Collects available Expression codes from the root tree.
+  List<String> _expressionCodes() {
+    final root = widget.root;
+    if (root == null) return [];
+    final codes = <String>[];
+    for (final child in root.children) {
+      if (child.isCollection && child.label == 'expressions') {
+        for (final expr in child.children) {
+          codes.add(expr.label);
         }
       }
     }
@@ -919,6 +965,20 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             const SizedBox(height: 12),
             _entityDropdown(),
           ],
+          if (n.isEntityProvider) ...[
+            const SizedBox(height: 12),
+            _filterInjectableRefDropdown(),
+          ],
+          if (n.isExpression) ...[
+            const SizedBox(height: 12),
+            _expressionTypeDropdown(),
+            const SizedBox(height: 12),
+            _injectableBaseClassDropdown(),
+            const SizedBox(height: 12),
+            _expressionBodyField(),
+            const SizedBox(height: 12),
+            _expressionDescField(),
+          ],
           if (n.hasTypeField) ...[
             const SizedBox(height: 12),
             _typeDropdown(),
@@ -1063,6 +1123,18 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && _sortFieldCtrl.text.trim() != (n.dataBinding ?? '');
     final sortDirectionChanged = n.isSortField
         && _selectedSortDirection != (n.typeValue ?? '');
+    // Expression-specific change detection
+    final exprTypeChanged = n.isExpression
+        && _selectedExpressionType != (n.typeValue ?? '');
+    final exprBaseClassChanged = n.isExpression
+        && _selectedInjectableBaseClass != (n.entityValue ?? '');
+    final exprBodyChanged = n.isExpression
+        && _expressionBodyCtrl.text != (n.dataBinding ?? '');
+    final exprDescChanged = n.isExpression
+        && _expressionDescCtrl.text != (n.template ?? '');
+    // EntityProvider filterInjectableRef
+    final filterInjectableRefChanged = n.isEntityProvider
+        && (_selectedFilterInjectableRef ?? '') != (n.filterInjectableRef ?? '');
 
     if (!codeChanged && !typeChanged && !entityChanged && !dataBindingChanged
         && !providerRefChanged && !rendererRefChanged && !templateChanged
@@ -1070,18 +1142,36 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && !viewProviderRefChanged && !viewContentChanged
         && !tableColKeyChanged && !tableColHeaderChanged && !tableColRendererChanged
         && !filterTypeChanged && !filterFieldChanged && !filterOperatorChanged && !filterValueChanged
-        && !sortFieldChanged && !sortDirectionChanged) {
+        && !sortFieldChanged && !sortDirectionChanged
+        && !exprTypeChanged && !exprBaseClassChanged && !exprBodyChanged && !exprDescChanged
+        && !filterInjectableRefChanged) {
       return;
     }
 
     if (n.isEntityProvider) {
-      await _run(() => widget.service.updateEntityProvider(
-            providerId: n.id!,
-            providerCode: n.label,
-            entityTypeNodeId: n.entityNodeId,
-            newCode: codeChanged ? code : null,
-            newEntityTypeValue: entityChanged ? _selectedEntity : null,
-          ));
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.updateEntityProvider(
+              providerId: n.id!,
+              providerCode: n.label,
+              entityTypeNodeId: n.entityNodeId,
+              newCode: codeChanged ? code : null,
+              newEntityTypeValue: entityChanged ? _selectedEntity : null,
+            );
+        // FilterInjectableRef
+        if (filterInjectableRefChanged) {
+          final ref = _selectedFilterInjectableRef;
+          if (ref != null && ref.isNotEmpty) {
+            if (n.filterInjectableRefNodeId != null) {
+              tree = await widget.service.updateNode(n.filterInjectableRefNodeId!, code: ref);
+            } else {
+              tree = await widget.service.addNode(
+                parentObjectId: n.id, typeCode: 'FilterInjectableRef', code: ref,
+              );
+            }
+          }
+        }
+        return tree;
+      });
     } else if (n.isEntityRenderer) {
       await _run(() => widget.service.updateEntityRenderer(
             rendererId: n.id!,
@@ -1297,6 +1387,58 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             tree = await widget.service.addNode(
               parentObjectId: n.id, typeCode: 'SortDirection',
               code: '${code}_dir', enumValue: _selectedSortDirection,
+            );
+          }
+        }
+        return tree;
+      });
+    } else if (n.isExpression) {
+      await _run(() async {
+        AppConfigNode? tree;
+        if (codeChanged) {
+          tree = await widget.service.updateNode(n.id!, code: code);
+        }
+        // ExpressionType
+        if (exprTypeChanged) {
+          if (n.typeNodeId != null) {
+            tree = await widget.service.updateNode(n.typeNodeId!, enumValue: _selectedExpressionType);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ExpressionType',
+              code: '${code}_type', enumValue: _selectedExpressionType,
+            );
+          }
+        }
+        // InjectableBaseClass
+        if (exprBaseClassChanged) {
+          if (n.entityNodeId != null) {
+            tree = await widget.service.updateNode(n.entityNodeId!, enumValue: _selectedInjectableBaseClass);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'InjectableBaseClass',
+              code: '${code}_baseClass', enumValue: _selectedInjectableBaseClass,
+            );
+          }
+        }
+        // Expression body (source code)
+        final bodyText = _expressionBodyCtrl.text;
+        if (exprBodyChanged) {
+          if (n.dataBindingNodeId != null) {
+            tree = await widget.service.updateNode(n.dataBindingNodeId!, code: bodyText);
+          } else if (bodyText.isNotEmpty) {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ExpressionBody', code: bodyText,
+            );
+          }
+        }
+        // Description
+        final descText = _expressionDescCtrl.text;
+        if (exprDescChanged) {
+          if (n.templateNodeId != null) {
+            tree = await widget.service.updateNode(n.templateNodeId!, code: descText);
+          } else if (descText.isNotEmpty) {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: 'ExpressionDescription', code: descText,
             );
           }
         }
@@ -1671,6 +1813,77 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       ),
       items: items,
       onChanged: (v) => setState(() => _selectedEntityRendererRef = v),
+    );
+  }
+
+  Widget _expressionTypeDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _selectedExpressionType,
+      decoration: const InputDecoration(
+        labelText: 'Expression Type',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _kExpressionTypes
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: (v) => setState(() => _selectedExpressionType = v ?? _kExpressionTypes.first),
+    );
+  }
+
+  Widget _injectableBaseClassDropdown() {
+    return DropdownButtonFormField<String>(
+      value: _selectedInjectableBaseClass,
+      decoration: const InputDecoration(
+        labelText: 'Base Class',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: _kInjectableBaseClasses
+          .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+          .toList(),
+      onChanged: (v) => setState(() => _selectedInjectableBaseClass = v ?? _kInjectableBaseClasses.first),
+    );
+  }
+
+  Widget _expressionBodyField() {
+    return TextFormField(
+      controller: _expressionBodyCtrl,
+      decoration: const InputDecoration(
+        labelText: 'Expression Body (source code)',
+        border: OutlineInputBorder(),
+        alignLabelWithHint: true,
+      ),
+      maxLines: 12,
+      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+    );
+  }
+
+  Widget _expressionDescField() {
+    return TextFormField(
+      controller: _expressionDescCtrl,
+      decoration: const InputDecoration(
+        labelText: 'Description',
+        border: OutlineInputBorder(),
+      ),
+    );
+  }
+
+  Widget _filterInjectableRefDropdown() {
+    final codes = _expressionCodes();
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none)')),
+      ...codes.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: codes.contains(_selectedFilterInjectableRef) ? _selectedFilterInjectableRef : null,
+      decoration: const InputDecoration(
+        labelText: 'Filter Injectable (Expression)',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedFilterInjectableRef = v),
     );
   }
 
