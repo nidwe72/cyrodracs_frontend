@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -111,17 +112,26 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
   List<CompileCheckError> _errors = [];
   List<CompileCheckWarning> _warnings = [];
   bool _checking = false;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
     _codeController = CodeLineEditingController.fromText(widget.initialSource);
+    _codeController.addListener(_onCodeChanged);
   }
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
+    _codeController.removeListener(_onCodeChanged);
     _codeController.dispose();
     super.dispose();
+  }
+
+  void _onCodeChanged() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), _compileCheck);
   }
 
   String get _baseClassName =>
