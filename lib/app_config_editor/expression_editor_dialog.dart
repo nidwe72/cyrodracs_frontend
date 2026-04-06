@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:re_editor/re_editor.dart';
 import 'package:re_highlight/languages/java.dart';
 import 'package:re_highlight/styles/atom-one-light.dart';
@@ -153,7 +154,11 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
     }
   }
 
-  void _save() {
+  Future<void> _save() async {
+    // Run compile-check before saving — block if errors
+    await _compileCheck();
+    if (!mounted) return;
+    if (_errors.isNotEmpty) return; // stay open, errors are displayed
     Navigator.pop(context, _codeController.text);
   }
 
@@ -246,6 +251,13 @@ class _ExpressionEditorDialogState extends State<ExpressionEditorDialog> {
                         chunkController, notifier) {
                       return Row(
                         children: [
+                          _ErrorGutter(
+                            notifier: notifier,
+                            errorLines: _errors
+                                .where((e) => e.line > 0)
+                                .map((e) => e.line - 1) // 0-based
+                                .toSet(),
+                          ),
                           DefaultCodeLineNumber(
                             controller: editingController,
                             notifier: notifier,
@@ -481,5 +493,104 @@ class _AutocompletePopupState extends State<_AutocompletePopup> {
               style: style.copyWith(color: Colors.grey.shade500, fontSize: 11)),
       ],
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Error gutter indicator (red circles on error lines)
+// ---------------------------------------------------------------------------
+
+class _ErrorGutter extends LeafRenderObjectWidget {
+  final CodeIndicatorValueNotifier notifier;
+  final Set<int> errorLines; // 0-based line indices
+
+  const _ErrorGutter({
+    required this.notifier,
+    required this.errorLines,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _ErrorGutterRenderObject(
+      notifier: notifier,
+      errorLines: errorLines,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+      BuildContext context, covariant _ErrorGutterRenderObject renderObject) {
+    renderObject
+      ..notifier = notifier
+      ..errorLines = errorLines;
+  }
+}
+
+class _ErrorGutterRenderObject extends RenderBox {
+  CodeIndicatorValueNotifier _notifier;
+  Set<int> _errorLines;
+
+  static const double _width = 16;
+  static const double _iconRadius = 4;
+
+  _ErrorGutterRenderObject({
+    required CodeIndicatorValueNotifier notifier,
+    required Set<int> errorLines,
+  })  : _notifier = notifier,
+        _errorLines = errorLines;
+
+  set notifier(CodeIndicatorValueNotifier value) {
+    if (_notifier == value) return;
+    if (attached) _notifier.removeListener(markNeedsPaint);
+    _notifier = value;
+    if (attached) _notifier.addListener(markNeedsPaint);
+    markNeedsPaint();
+  }
+
+  set errorLines(Set<int> value) {
+    if (_errorLines == value) return;
+    _errorLines = value;
+    markNeedsPaint();
+  }
+
+  @override
+  void attach(covariant PipelineOwner owner) {
+    _notifier.addListener(markNeedsPaint);
+    super.attach(owner);
+  }
+
+  @override
+  void detach() {
+    _notifier.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  @override
+  void performLayout() {
+    size = Size(_errorLines.isEmpty ? 0 : _width, constraints.maxHeight);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (_errorLines.isEmpty) return;
+    final value = _notifier.value;
+    if (value == null || value.paragraphs.isEmpty) return;
+
+    final canvas = context.canvas;
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(offset.dx, offset.dy, size.width, size.height));
+
+    final paint = Paint()..color = Colors.red;
+
+    for (final paragraph in value.paragraphs) {
+      if (_errorLines.contains(paragraph.index)) {
+        final cy = offset.dy + paragraph.offset.dy +
+            (paragraph.height / 2);
+        final cx = offset.dx + _width / 2;
+        canvas.drawCircle(Offset(cx, cy), _iconRadius, paint);
+      }
+    }
+
+    canvas.restore();
   }
 }
