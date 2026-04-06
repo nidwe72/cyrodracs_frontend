@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/app_config_node.dart';
 import 'app_config_service.dart';
+import 'expression_editor_dialog.dart';
 
 const _kTypeValues = [
   'INPUT_STRING',
@@ -975,7 +976,11 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             const SizedBox(height: 12),
             _injectableBaseClassDropdown(),
             const SizedBox(height: 12),
-            _expressionBodyField(),
+            if (_selectedExpressionType == 'INJECTABLE_CLASS' ||
+                _selectedExpressionType == 'INJECTABLE_SNIPPET')
+              _expressionEditSourceButton()
+            else
+              _expressionBodyField(),
             const SizedBox(height: 12),
             _expressionDescField(),
           ],
@@ -1850,12 +1855,61 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     return TextFormField(
       controller: _expressionBodyCtrl,
       decoration: const InputDecoration(
-        labelText: 'Expression Body (source code)',
+        labelText: 'Expression Body',
 
         alignLabelWithHint: true,
       ),
-      maxLines: 12,
+      maxLines: 4,
       style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+    );
+  }
+
+  Widget _expressionEditSourceButton() {
+    final n = widget.node;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Expression Body (source code)',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
+        const SizedBox(height: 4),
+        if (_expressionBodyCtrl.text.isNotEmpty)
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxHeight: 160), // ~10 lines
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              color: Colors.grey.shade50,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(8),
+              child: SelectableText(
+                _expressionBodyCtrl.text,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.code, size: 16),
+          label: const Text('Edit Source'),
+          onPressed: () async {
+            final result = await ExpressionEditorDialog.show(
+              context,
+              expressionCode: n?.label ?? '',
+              expressionType: _selectedExpressionType,
+              baseClass: _selectedInjectableBaseClass,
+              initialSource: _expressionBodyCtrl.text,
+            );
+            if (result != null) {
+              setState(() {
+                _expressionBodyCtrl.text = result;
+              });
+            }
+          },
+        ),
+      ],
     );
   }
 

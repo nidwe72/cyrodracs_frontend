@@ -426,4 +426,79 @@ class AppConfigService {
 
     return tree;
   }
+
+  // ---------------------------------------------------------------------------
+  // Expression Compile Check
+  // ---------------------------------------------------------------------------
+
+  static const _expressionBase = 'http://localhost:8080/api/expressions';
+
+  Future<CompileCheckResult> compileCheck({
+    required String type,
+    required String baseClass,
+    required String expression,
+    String? expectedEntityType,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_expressionBase/compile-check'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'type': type,
+        'baseClass': baseClass,
+        'expression': expression,
+        if (expectedEntityType != null) 'expectedEntityType': expectedEntityType,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Compile check failed: HTTP ${response.statusCode}');
+    }
+    return CompileCheckResult.fromJson(
+        jsonDecode(response.body) as Map<String, dynamic>);
+  }
+}
+
+class CompileCheckError {
+  final int line;
+  final String message;
+  const CompileCheckError({required this.line, required this.message});
+
+  factory CompileCheckError.fromJson(Map<String, dynamic> json) {
+    return CompileCheckError(
+      line: (json['line'] as num).toInt(),
+      message: json['message'] as String,
+    );
+  }
+}
+
+class CompileCheckWarning {
+  final String message;
+  const CompileCheckWarning({required this.message});
+
+  factory CompileCheckWarning.fromJson(Map<String, dynamic> json) {
+    return CompileCheckWarning(message: json['message'] as String);
+  }
+}
+
+class CompileCheckResult {
+  final bool valid;
+  final List<CompileCheckError> errors;
+  final List<CompileCheckWarning> warnings;
+
+  const CompileCheckResult({
+    required this.valid,
+    required this.errors,
+    required this.warnings,
+  });
+
+  factory CompileCheckResult.fromJson(Map<String, dynamic> json) {
+    return CompileCheckResult(
+      valid: json['valid'] as bool,
+      errors: ((json['errors'] as List<dynamic>?) ?? [])
+          .map((e) => CompileCheckError.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      warnings: ((json['warnings'] as List<dynamic>?) ?? [])
+          .map((w) => CompileCheckWarning.fromJson(w as Map<String, dynamic>))
+          .toList(),
+    );
+  }
 }
