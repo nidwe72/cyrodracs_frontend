@@ -1483,7 +1483,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           autofocus: true,
           decoration: const InputDecoration(
             labelText: 'New code',
-            border: OutlineInputBorder(),
+
             isDense: true,
           ),
         ),
@@ -1530,7 +1530,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         controller: _codeCtrl,
         decoration: const InputDecoration(
           labelText: 'Code',
-          border: OutlineInputBorder(),
+  
           isDense: true,
         ),
       );
@@ -1545,7 +1545,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: _kEntityValues.contains(_selectedEntity) ? _selectedEntity : null,
       decoration: const InputDecoration(
         labelText: 'Entity',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: items,
@@ -1561,7 +1561,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: value,
       decoration: const InputDecoration(
         labelText: 'Type',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kTypeValues
@@ -1661,7 +1661,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             focusNode: _dataBindingFocus,
             decoration: InputDecoration(
               labelText: 'Data Binding',
-              border: const OutlineInputBorder(),
+
               isDense: true,
               prefixText: '$entityLabel.',
               prefixStyle: const TextStyle(
@@ -1790,7 +1790,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: codes.contains(_selectedEntityProviderRef) ? _selectedEntityProviderRef : null,
       decoration: const InputDecoration(
         labelText: 'Entity Provider',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: items,
@@ -1808,7 +1808,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: codes.contains(_selectedEntityRendererRef) ? _selectedEntityRendererRef : null,
       decoration: const InputDecoration(
         labelText: 'Entity Renderer',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: items,
@@ -1821,7 +1821,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: _selectedExpressionType,
       decoration: const InputDecoration(
         labelText: 'Expression Type',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kExpressionTypes
@@ -1836,7 +1836,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: _selectedInjectableBaseClass,
       decoration: const InputDecoration(
         labelText: 'Base Class',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kInjectableBaseClasses
@@ -1851,7 +1851,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       controller: _expressionBodyCtrl,
       decoration: const InputDecoration(
         labelText: 'Expression Body (source code)',
-        border: OutlineInputBorder(),
+
         alignLabelWithHint: true,
       ),
       maxLines: 12,
@@ -1864,7 +1864,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       controller: _expressionDescCtrl,
       decoration: const InputDecoration(
         labelText: 'Description',
-        border: OutlineInputBorder(),
+
       ),
     );
   }
@@ -1879,7 +1879,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: codes.contains(_selectedFilterInjectableRef) ? _selectedFilterInjectableRef : null,
       decoration: const InputDecoration(
         labelText: 'Filter Injectable (Expression)',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: items,
@@ -1910,7 +1910,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             focusNode: _templateFocus,
             decoration: const InputDecoration(
               labelText: 'Mustache Template',
-              border: OutlineInputBorder(),
+  
               isDense: true,
               hintText: '{{name}}{{#field}} ({{field}}){{/field}}',
             ),
@@ -2131,7 +2131,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: value,
       decoration: const InputDecoration(
         labelText: 'View Node Type',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kViewNodeTypes
@@ -2147,7 +2147,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         controller: _viewLabelCtrl,
         decoration: const InputDecoration(
           labelText: 'Label',
-          border: OutlineInputBorder(),
+  
           isDense: true,
         ),
       );
@@ -2162,7 +2162,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: codes.contains(_selectedDataFormRef) ? _selectedDataFormRef : null,
       decoration: const InputDecoration(
         labelText: 'Data Form',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: items,
@@ -2174,7 +2174,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         controller: _viewContentCtrl,
         decoration: const InputDecoration(
           labelText: 'Content',
-          border: OutlineInputBorder(),
+  
           isDense: true,
         ),
         maxLines: 3,
@@ -2259,7 +2259,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             focusNode: _tableColKeyFocus,
             decoration: InputDecoration(
               labelText: 'Key (entity attribute)',
-              border: const OutlineInputBorder(),
+
               isDense: true,
               prefixText: hasCompletions ? '$entityLabel.' : null,
               prefixStyle: const TextStyle(
@@ -2356,7 +2356,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         controller: _tableColHeaderCtrl,
         decoration: const InputDecoration(
           labelText: 'Header (display text)',
-          border: OutlineInputBorder(),
+  
           isDense: true,
         ),
       );
@@ -2371,7 +2371,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       value: codes.contains(_selectedTableColRendererRef) ? _selectedTableColRendererRef : null,
       decoration: const InputDecoration(
         labelText: 'Renderer (for relationship columns)',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: items,
@@ -2389,7 +2389,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           ? _selectedFilterNodeType : _kFilterNodeTypes.first,
       decoration: const InputDecoration(
         labelText: 'Filter Type',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kFilterNodeTypes
@@ -2431,7 +2431,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           controller: _filterFieldCtrl,
           decoration: InputDecoration(
             labelText: 'Field (dot-path)',
-            border: const OutlineInputBorder(),
+
+
             isDense: true,
             prefixText: hasCompletions ? '$entityLabel.' : null,
             prefixStyle: const TextStyle(
@@ -2524,7 +2525,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           ? _selectedFilterOperator : _kFilterOperators.first,
       decoration: const InputDecoration(
         labelText: 'Operator',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kFilterOperators
@@ -2540,7 +2541,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         controller: _filterValueCtrl,
         decoration: const InputDecoration(
           labelText: 'Value',
-          border: OutlineInputBorder(),
+  
           isDense: true,
         ),
       );
@@ -2561,7 +2562,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           controller: _sortFieldCtrl,
           decoration: InputDecoration(
             labelText: 'Field (dot-path)',
-            border: const OutlineInputBorder(),
+
+
             isDense: true,
             prefixText: hasCompletions ? '$entityLabel.' : null,
             prefixStyle: const TextStyle(
@@ -2630,7 +2632,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           ? _selectedSortDirection : _kSortDirections.first,
       decoration: const InputDecoration(
         labelText: 'Direction',
-        border: OutlineInputBorder(),
+
         isDense: true,
       ),
       items: _kSortDirections
@@ -2782,7 +2784,7 @@ class _BindingPickerDialogState extends State<_BindingPickerDialog> {
                 decoration: const InputDecoration(
                   hintText: 'Filter...',
                   prefixIcon: Icon(Icons.search, size: 18),
-                  border: OutlineInputBorder(),
+      
                   isDense: true,
                   contentPadding:
                       EdgeInsets.symmetric(horizontal: 12, vertical: 8),

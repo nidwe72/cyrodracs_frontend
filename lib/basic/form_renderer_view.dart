@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../app_config_editor/app_config_service.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
+import '../theme/app_theme.dart';
 
 class FormRendererView extends StatefulWidget {
   final DataForm form;
@@ -136,16 +137,16 @@ class _FormRendererViewState extends State<FormRendererView> {
       child: switch (e.type) {
         DataFormElementType.inputString => TextFormField(
             initialValue: _values[e.key]?.toString(),
-            decoration: InputDecoration(labelText: e.label, border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: e.label),
             onSaved: (v) => _values[e.key] = v,
           ),
         DataFormElementType.inputNumber => TextFormField(
-            decoration: InputDecoration(labelText: e.label, border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: e.label),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             onSaved: (v) => _values[e.key] = v == null || v.isEmpty ? null : double.tryParse(v),
           ),
         DataFormElementType.inputEmail => TextFormField(
-            decoration: InputDecoration(labelText: e.label, border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: e.label),
             keyboardType: TextInputType.emailAddress,
             onSaved: (v) => _values[e.key] = v,
           ),
@@ -156,14 +157,14 @@ class _FormRendererViewState extends State<FormRendererView> {
         DataFormElementType.textarea => TextFormField(
             decoration: InputDecoration(
               labelText: e.label,
-              border: const OutlineInputBorder(),
+      
               alignLabelWithHint: true,
             ),
             maxLines: e.rows ?? 3,
             onSaved: (v) => _values[e.key] = v,
           ),
         DataFormElementType.select => DropdownButtonFormField<String>(
-            decoration: InputDecoration(labelText: e.label, border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: e.label),
             items: e.options.map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
             onChanged: (v) => _values[e.key] = v,
             onSaved: (v) => _values[e.key] = v,
@@ -234,11 +235,13 @@ class _FormRendererViewState extends State<FormRendererView> {
             onChanged: (v) => _values[e.key] = v,
             onSaved: (v) => _values[e.key] = v,
           ),
-        DataFormElementType.grid => Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('GRID: ${e.label ?? e.key} (not yet rendered)'),
-            ),
+        DataFormElementType.grid => _GridField(
+            label: e.label,
+            dataFormCode: widget.form.code ?? '',
+            elementCode: e.key,
+            entityId: widget.entityId,
+            formState: _values,
+            tableColumns: e.tableColumns,
           ),
       },
     );
@@ -300,7 +303,7 @@ class _PasswordFieldState extends State<_PasswordField> {
       obscureText: _obscure,
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         suffixIcon: IconButton(
           icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off, size: 18),
           onPressed: () => setState(() => _obscure = !_obscure),
@@ -364,7 +367,7 @@ class _DateFieldState extends State<_DateField> {
       onTap: _pick,
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         suffixIcon: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -446,7 +449,7 @@ class _YearMonthFieldState extends State<_YearMonthField> {
       decoration: InputDecoration(
         labelText: widget.label,
         hintText: 'YYYY-MM',
-        border: const OutlineInputBorder(),
+
         suffixIcon: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -501,7 +504,7 @@ class _TimeFieldState extends State<_TimeField> {
       onTap: _pick,
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         suffixIcon: const Icon(Icons.access_time, size: 18),
       ),
       onSaved: (_) => widget.onSaved(_controller.text.isEmpty ? null : _controller.text),
@@ -553,7 +556,7 @@ class _DateTimeFieldState extends State<_DateTimeField> {
       onTap: _pick,
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         suffixIcon: const Icon(Icons.calendar_today, size: 18),
       ),
       onSaved: (_) => widget.onSaved(_controller.text.isEmpty ? null : _controller.text),
@@ -606,7 +609,7 @@ class _DateRangeFieldState extends State<_DateRangeField> {
       onTap: _pick,
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         suffixIcon: const Icon(Icons.date_range, size: 18),
       ),
       onSaved: (_) => widget.onSaved(_controller.text.isEmpty ? null : _controller.text),
@@ -679,7 +682,7 @@ class _MultiSelectFieldState extends State<_MultiSelectField> {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: widget.label,
-          border: const OutlineInputBorder(),
+  
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           suffixIcon: const Icon(Icons.arrow_drop_down),
         ),
@@ -720,7 +723,7 @@ class _CheckboxGroupFieldState extends State<_CheckboxGroupField> {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       ),
       child: Column(
@@ -770,7 +773,7 @@ class _RadioGroupFieldState extends State<_RadioGroupField> {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       ),
       child: Column(
@@ -816,7 +819,7 @@ class _CheckboxFieldState extends State<_CheckboxField> {
   Widget build(BuildContext context) {
     return InputDecorator(
       decoration: const InputDecoration(
-        border: OutlineInputBorder(),
+
         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       ),
       child: CheckboxListTile(
@@ -852,7 +855,7 @@ class _ToggleFieldState extends State<_ToggleField> {
   Widget build(BuildContext context) {
     return InputDecorator(
       decoration: const InputDecoration(
-        border: OutlineInputBorder(),
+
         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       ),
       child: Row(
@@ -908,7 +911,7 @@ class _SliderFieldState extends State<_SliderField> {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: '${widget.label}: ${_value.toStringAsFixed(0)}',
-        border: const OutlineInputBorder(),
+
         contentPadding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       ),
       child: Slider(
@@ -945,7 +948,7 @@ class _RatingFieldState extends State<_RatingField> {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
       child: Row(
@@ -1039,7 +1042,7 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       return InputDecorator(
         decoration: InputDecoration(
           labelText: widget.label,
-          border: const OutlineInputBorder(),
+  
         ),
         child: const SizedBox(
           height: 20,
@@ -1052,7 +1055,7 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       return InputDecorator(
         decoration: InputDecoration(
           labelText: widget.label,
-          border: const OutlineInputBorder(),
+  
           errorText: _error,
         ),
         child: const SizedBox.shrink(),
@@ -1068,7 +1071,7 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       value: _options.any((o) => o.id == _selectedId) ? _selectedId : null,
       decoration: InputDecoration(
         labelText: widget.label,
-        border: const OutlineInputBorder(),
+
       ),
       items: items,
       onChanged: (v) {
@@ -1076,6 +1079,237 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
         widget.onChanged(v);
       },
       onSaved: (_) => widget.onSaved(_selectedId),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GRID field (embedded table showing related entities)
+// ---------------------------------------------------------------------------
+
+class _GridField extends StatefulWidget {
+  final String label;
+  final String dataFormCode;
+  final String elementCode;
+  final int? entityId;
+  final Map<String, dynamic> formState;
+  final List<GridTableColumn> tableColumns;
+
+  const _GridField({
+    required this.label,
+    required this.dataFormCode,
+    required this.elementCode,
+    this.entityId,
+    required this.formState,
+    required this.tableColumns,
+  });
+
+  @override
+  State<_GridField> createState() => _GridFieldState();
+}
+
+class _GridFieldState extends State<_GridField> {
+  List<Map<String, dynamic>> _rows = [];
+  bool _loading = false;
+  String? _error;
+  int _page = 0;
+  final int _pageSize = 10;
+  int _totalCount = 0;
+  int _totalPages = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.entityId != null) {
+      _fetchData();
+    }
+  }
+
+  Future<void> _fetchData() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    // Build formState as Map<String, String> for the backend
+    final formStateStrings = <String, String>{};
+    for (final entry in widget.formState.entries) {
+      if (entry.value != null) {
+        formStateStrings[entry.key] = entry.value.toString();
+      }
+    }
+
+    final body = <String, dynamic>{
+      'entityId': widget.entityId,
+      'formState': formStateStrings,
+    };
+
+    try {
+      final uri = Uri.parse(
+        'http://localhost:8080/api/view/grid-data/'
+        '${widget.dataFormCode}/${widget.elementCode}'
+        '?page=$_page&size=$_pageSize',
+      );
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        setState(() {
+          _rows = (data['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+          _totalCount = (data['totalCount'] as num).toInt();
+          _page = (data['page'] as num).toInt();
+          _totalPages = (data['totalPages'] as num).toInt();
+          _loading = false;
+        });
+      } else {
+        setState(() {
+          _error = 'HTTP ${response.statusCode}';
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = Theme.of(context).inputDecorationTheme.border
+        is OutlineInputBorder
+        ? (Theme.of(context).inputDecorationTheme.border as OutlineInputBorder)
+            .borderSide.color
+        : Colors.grey;
+
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Panel header
+            Container(
+              width: double.infinity,
+              padding: AppTheme.panelHeaderPadding,
+              decoration: BoxDecoration(
+                color: AppTheme.panelHeaderBackground,
+                border: Border(bottom: BorderSide(color: borderColor)),
+              ),
+              child: Row(
+                children: [
+                  Text(widget.label, style: AppTheme.panelHeaderTitle),
+                  if (!_loading && widget.entityId != null) ...[
+                    const SizedBox(width: AppTheme.spacingSm),
+                    Text(
+                      '($_totalCount)',
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                    ),
+                  ],
+                  const Spacer(),
+                  if (widget.entityId != null)
+                    IconButton(
+                      icon: const Icon(Icons.refresh, size: AppTheme.iconSize),
+                      tooltip: 'Reload',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _fetchData,
+                    ),
+                ],
+              ),
+            ),
+          // Content
+          if (widget.entityId == null)
+            Padding(
+              padding: const EdgeInsets.all(AppTheme.spacingMd),
+              child: const Text(
+                'Save the record first to see related entries.',
+                style: TextStyle(color: Colors.grey),
+              ),
+            )
+          else if (_loading)
+            const Center(child: Padding(
+              padding: EdgeInsets.all(AppTheme.spacingLg),
+              child: CircularProgressIndicator(),
+            ))
+          else if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(AppTheme.spacingMd),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Error: $_error', style: const TextStyle(color: Colors.red)),
+                  const SizedBox(height: AppTheme.spacingSm),
+                  TextButton(onPressed: _fetchData, child: const Text('Retry')),
+                ],
+              ),
+            )
+          else if (_rows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(AppTheme.spacingMd),
+              child: Text('No entries.', style: TextStyle(color: Colors.grey)),
+            )
+          else ...[
+            SizedBox(
+              width: double.infinity,
+              child: DataTable(
+                columns: widget.tableColumns
+                    .map((c) => DataColumn(label: Text(c.header)))
+                    .toList(),
+                rows: _rows.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final row = entry.value;
+                  return DataRow(
+                    color: AppTheme.stripeColor(index),
+                    cells: widget.tableColumns
+                        .map((c) => DataCell(Text('${row[c.key] ?? ''}')))
+                        .toList(),
+                  );
+                }).toList(),
+              ),
+            ),
+            // Pagination
+            if (_totalPages > 1)
+              Padding(
+                padding: EdgeInsets.only(
+                  top: AppTheme.spacingSm,
+                  bottom: AppTheme.spacingSm,
+                  right: AppTheme.spacingSm,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.first_page, size: AppTheme.iconSize),
+                      onPressed: _page > 0 ? () { _page = 0; _fetchData(); } : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_left, size: AppTheme.iconSize),
+                      onPressed: _page > 0 ? () { _page--; _fetchData(); } : null,
+                    ),
+                    Text('Page ${_page + 1} of $_totalPages',
+                        style: const TextStyle(fontSize: 13)),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right, size: AppTheme.iconSize),
+                      onPressed: _page < _totalPages - 1 ? () { _page++; _fetchData(); } : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.last_page, size: AppTheme.iconSize),
+                      onPressed: _page < _totalPages - 1 ? () { _page = _totalPages - 1; _fetchData(); } : null,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+      ),
     );
   }
 }

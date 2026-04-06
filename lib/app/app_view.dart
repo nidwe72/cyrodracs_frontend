@@ -6,6 +6,7 @@ import '../basic/form_renderer_view.dart';
 import '../models/app_config_node.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
+import '../theme/app_theme.dart';
 
 /// Converts a SCREAMING_SNAKE_CASE backend type value to the camelCase name
 /// expected by [DataFormElementType.byName].
@@ -31,12 +32,26 @@ DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
                     type = DataFormElementType.values.byName(_toCamelCase(raw));
                   } catch (_) {}
                 }
+                // Parse GridTableColumns from tableColumns collection child
+                final tableColumns = <GridTableColumn>[];
+                for (final elemChild in elem.children) {
+                  if (elemChild.isCollection && elemChild.label == 'tableColumns') {
+                    for (final colNode in elemChild.children) {
+                      tableColumns.add(GridTableColumn(
+                        key: colNode.dataBinding ?? colNode.label,
+                        header: colNode.viewNodeLabel ?? colNode.label,
+                        entityRendererRef: colNode.entityRendererRef,
+                      ));
+                    }
+                  }
+                }
                 elements.add(DataFormElement(
                   key: elem.label,
                   label: elem.label,
                   type: type,
                   entityProviderRef: elem.entityProviderRef,
                   entityRendererRef: elem.entityRendererRef,
+                  tableColumns: tableColumns,
                 ));
               }
             }
@@ -449,106 +464,140 @@ class _AppViewState extends State<AppView> {
 
   Widget _buildEntityTable() {
     final def = _selectedDef!;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(def.label, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(width: 8),
-              Text('($_totalCount total)',
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-              const Spacer(),
-              if (def.dataFormRef != null)
-                IconButton(
-                  icon: const Icon(Icons.add, size: 18),
-                  tooltip: 'Add',
-                  onPressed: _addEntity,
-                ),
-              IconButton(
-                icon: const Icon(Icons.refresh, size: 18),
-                tooltip: 'Reload',
-                onPressed: () => _fetchEntities(def, page: _page),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (_entities.isEmpty)
-            Text('No ${def.label.toLowerCase()} found.',
-                style: const TextStyle(color: Colors.grey))
-          else
-            SizedBox(
+    return Padding(
+      padding: const EdgeInsets.all(AppTheme.spacingMd),
+      child: Card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Panel header
+            Container(
               width: double.infinity,
-              child: DataTable(
-                columns: [
-                  ...def.columns.map((c) => DataColumn(label: Text(c.header))),
-                  const DataColumn(label: Text('Actions')),
+              padding: AppTheme.panelHeaderPadding,
+              decoration: const BoxDecoration(color: AppTheme.panelHeaderBackground),
+              child: Row(
+                children: [
+                  Text(def.label, style: AppTheme.panelHeaderTitle),
+                  const SizedBox(width: AppTheme.spacingSm),
+                  Text('($_totalCount total)',
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                  const Spacer(),
+                  if (def.dataFormRef != null)
+                    IconButton(
+                      icon: const Icon(Icons.add, size: AppTheme.iconSize),
+                      tooltip: 'Add',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _addEntity,
+                    ),
+                  const SizedBox(width: AppTheme.spacingSm),
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: AppTheme.iconSize),
+                    tooltip: 'Reload',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _fetchEntities(def, page: _page),
+                  ),
                 ],
-                rows: _entities.map((e) {
-                  final id = (e['id'] as num).toInt();
-                  return DataRow(cells: [
-                    ...def.columns.map((c) => DataCell(Text('${e[c.key] ?? ''}'))),
-                    DataCell(Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (def.dataFormRef != null)
-                          IconButton(
-                            icon: const Icon(Icons.edit, size: 18),
-                            tooltip: 'Edit',
-                            onPressed: () => _editEntity(id),
-                          ),
-                        IconButton(
-                          icon: const Icon(Icons.delete, size: 18, color: Colors.red),
-                          tooltip: 'Delete',
-                          onPressed: () => _confirmDelete(id, e['name']),
-                        ),
-                      ],
-                    )),
-                  ]);
-                }).toList(),
               ),
             ),
-          if (_totalPages > 1) ...[
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.first_page, size: 20),
-                  tooltip: 'First page',
-                  onPressed: _page > 0
-                      ? () => _fetchEntities(def, page: 0)
-                      : null,
+            const Divider(height: 1, thickness: 1),
+            // Content — fills remaining height, scrollable
+            if (_entities.isEmpty)
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppTheme.spacingMd),
+                  child: Text('No ${def.label.toLowerCase()} found.',
+                      style: const TextStyle(color: Colors.grey)),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_left, size: 20),
-                  tooltip: 'Previous page',
-                  onPressed: _page > 0
-                      ? () => _fetchEntities(def, page: _page - 1)
-                      : null,
+              )
+            else
+              Expanded(
+                child: SingleChildScrollView(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: DataTable(
+                      columns: [
+                        ...def.columns.map((c) => DataColumn(label: Text(c.header))),
+                        const DataColumn(label: Text('Actions')),
+                      ],
+                      rows: _entities.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final e = entry.value;
+                        final id = (e['id'] as num).toInt();
+                        return DataRow(
+                          color: AppTheme.stripeColor(index),
+                          cells: [
+                            ...def.columns.map((c) => DataCell(Text('${e[c.key] ?? ''}'))),
+                            DataCell(Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (def.dataFormRef != null)
+                                  IconButton(
+                                    icon: const Icon(Icons.edit, size: AppTheme.iconSize),
+                                    tooltip: 'Edit',
+                                    onPressed: () => _editEntity(id),
+                                  ),
+                                IconButton(
+                                  icon: Icon(Icons.delete, size: AppTheme.iconSize, color: Colors.red),
+                                  tooltip: 'Delete',
+                                  onPressed: () => _confirmDelete(id, e['name']),
+                                ),
+                              ],
+                            )),
+                          ],
+                        );
+                      }).toList(),
+                    ),
+                  ),
                 ),
-                Text('Page ${_page + 1} of $_totalPages',
-                    style: const TextStyle(fontSize: 13)),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right, size: 20),
-                  tooltip: 'Next page',
-                  onPressed: _page < _totalPages - 1
-                      ? () => _fetchEntities(def, page: _page + 1)
-                      : null,
+              ),
+            // Pagination
+            if (_totalPages > 1)
+              Padding(
+                padding: EdgeInsets.only(
+                  top: AppTheme.spacingSm,
+                  bottom: AppTheme.spacingSm,
+                  right: AppTheme.spacingSm,
                 ),
-                IconButton(
-                  icon: const Icon(Icons.last_page, size: 20),
-                  tooltip: 'Last page',
-                  onPressed: _page < _totalPages - 1
-                      ? () => _fetchEntities(def, page: _totalPages - 1)
-                      : null,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.first_page, size: AppTheme.iconSize),
+                      tooltip: 'First page',
+                      onPressed: _page > 0
+                          ? () => _fetchEntities(def, page: 0)
+                          : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_left, size: AppTheme.iconSize),
+                      tooltip: 'Previous page',
+                      onPressed: _page > 0
+                          ? () => _fetchEntities(def, page: _page - 1)
+                          : null,
+                    ),
+                    Text('Page ${_page + 1} of $_totalPages',
+                        style: const TextStyle(fontSize: 13)),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right, size: AppTheme.iconSize),
+                      tooltip: 'Next page',
+                      onPressed: _page < _totalPages - 1
+                          ? () => _fetchEntities(def, page: _page + 1)
+                          : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.last_page, size: AppTheme.iconSize),
+                      tooltip: 'Last page',
+                      onPressed: _page < _totalPages - 1
+                          ? () => _fetchEntities(def, page: _totalPages - 1)
+                          : null,
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
           ],
-        ],
+        ),
       ),
     );
   }

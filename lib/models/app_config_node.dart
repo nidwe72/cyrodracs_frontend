@@ -141,12 +141,46 @@ class AppConfigNode {
 
       for (final elemEntry in elementsRaw.entries) {
         final elem = elemEntry.value as Map<String, dynamic>;
+        final elemId = (elem['id'] as num?)?.toInt();
+        final elemType = elem['type'] as String?;
+
+        // Parse GridTableColumn children for GRID elements
+        final gridColumnNodes = <AppConfigNode>[];
+        final columnsRaw = (elem['tableColumns'] as List<dynamic>?) ?? [];
+        for (final col in columnsRaw) {
+          final c = col as Map<String, dynamic>;
+          gridColumnNodes.add(AppConfigNode(
+            label: c['code'] as String,
+            kind: AppConfigNodeKind.instance,
+            id: (c['id'] as num?)?.toInt(),
+            typeCode: 'TableColumn',
+            dataBinding: c['key'] as String?,
+            dataBindingNodeId: (c['keyNodeId'] as num?)?.toInt(),
+            viewNodeLabel: c['header'] as String?,
+            viewNodeLabelNodeId: (c['headerNodeId'] as num?)?.toInt(),
+            entityRendererRef: c['entityRendererRef'] as String?,
+            entityRendererRefNodeId: (c['entityRendererRefNodeId'] as num?)?.toInt(),
+            children: const [],
+          ));
+        }
+
+        final elemChildren = <AppConfigNode>[];
+        if (elemType == 'GRID' || gridColumnNodes.isNotEmpty) {
+          elemChildren.add(AppConfigNode(
+            label: 'tableColumns',
+            kind: AppConfigNodeKind.collection,
+            childTypeCode: 'GridTableColumn',
+            parentId: elemId,
+            children: gridColumnNodes,
+          ));
+        }
+
         elementNodes.add(AppConfigNode(
           label: elem['code'] as String,
           kind: AppConfigNodeKind.instance,
-          id: (elem['id'] as num?)?.toInt(),
+          id: elemId,
           typeCode: 'DataFormElement',
-          typeValue: elem['type'] as String?,
+          typeValue: elemType,
           typeNodeId: (elem['typeNodeId'] as num?)?.toInt(),
           dataBinding: elem['dataBinding'] as String?,
           dataBindingNodeId: (elem['dataBindingNodeId'] as num?)?.toInt(),
@@ -154,7 +188,7 @@ class AppConfigNode {
           entityProviderRefNodeId: (elem['entityProviderRefNodeId'] as num?)?.toInt(),
           entityRendererRef: elem['entityRendererRef'] as String?,
           entityRendererRefNodeId: (elem['entityRendererRefNodeId'] as num?)?.toInt(),
-          children: const [],
+          children: elemChildren,
         ));
       }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
 import 'home_page.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   runApp(const MyApp());
@@ -32,21 +33,49 @@ class MyApp extends StatelessWidget {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: bs.colors.primary,
                   foregroundColor: bs.colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                ),
+              ),
+              outlinedButtonTheme: OutlinedButtonThemeData(
+                style: OutlinedButton.styleFrom(
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                ),
+              ),
+              textButtonTheme: TextButtonThemeData(
+                style: TextButton.styleFrom(
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
                 ),
               ),
               inputDecorationTheme: InputDecorationTheme(
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: bs.colors.secondary),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: bs.colors.black50, width: 2),
                 ),
                 floatingLabelStyle: const TextStyle(color: Colors.black),
                 floatingLabelBehavior: FloatingLabelBehavior.always,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              cardTheme: CardTheme(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                  side: BorderSide(color: bs.colors.secondary),
+                ),
+                elevation: 0,
+                margin: EdgeInsets.zero,
+              ),
+              dialogTheme: const DialogTheme(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+              ),
+              dataTableTheme: DataTableThemeData(
+                headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
+                headingTextStyle: AppTheme.tableHeaderStyle,
+                dataTextStyle: const TextStyle(fontSize: 13),
+                columnSpacing: AppTheme.spacingLg,
+                horizontalMargin: AppTheme.spacingMd,
               ),
             ),
           ),

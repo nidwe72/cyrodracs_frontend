@@ -21,6 +21,18 @@ enum DataFormElementType {
   grid,
 }
 
+class GridTableColumn {
+  final String key;
+  final String header;
+  final String? entityRendererRef;
+
+  const GridTableColumn({
+    required this.key,
+    required this.header,
+    this.entityRendererRef,
+  });
+}
+
 class DataFormElement {
   final String key;
   final String label;
@@ -37,6 +49,8 @@ class DataFormElement {
   final double? min;
   final double? max;
   final int? rows;
+  final List<GridTableColumn> tableColumns;
+  final bool reloadOnChange;
 
   const DataFormElement({
     required this.key,
@@ -54,6 +68,8 @@ class DataFormElement {
     this.min,
     this.max,
     this.rows,
+    this.tableColumns = const [],
+    this.reloadOnChange = false,
   });
 
   factory DataFormElement.fromJson(Map<String, dynamic> json) {
@@ -73,6 +89,17 @@ class DataFormElement {
       min: (json['min'] as num?)?.toDouble(),
       max: (json['max'] as num?)?.toDouble(),
       rows: json['rows'] as int?,
+      tableColumns: ((json['tableColumns'] as List<dynamic>?) ?? [])
+          .map((c) {
+            final m = c as Map<String, dynamic>;
+            return GridTableColumn(
+              key: m['key'] as String,
+              header: m['header'] as String,
+              entityRendererRef: m['entityRendererRef'] as String?,
+            );
+          })
+          .toList(),
+      reloadOnChange: json['reloadOnChange'] as bool? ?? false,
     );
   }
 }

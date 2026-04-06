@@ -25,10 +25,26 @@ DataForm _buildDataForm(AppConfigNode formNode) {
             type = DataFormElementType.values.byName(_toCamelCase(raw));
           } catch (_) {}
         }
+        // Parse GridTableColumns from tableColumns collection child
+        final tableColumns = <GridTableColumn>[];
+        for (final elemChild in elem.children) {
+          if (elemChild.isCollection && elemChild.label == 'tableColumns') {
+            for (final colNode in elemChild.children) {
+              tableColumns.add(GridTableColumn(
+                key: colNode.dataBinding ?? colNode.label,
+                header: colNode.viewNodeLabel ?? colNode.label,
+                entityRendererRef: colNode.entityRendererRef,
+              ));
+            }
+          }
+        }
         elements.add(DataFormElement(
           key: elem.label,
           label: elem.label,
           type: type,
+          entityProviderRef: elem.entityProviderRef,
+          entityRendererRef: elem.entityRendererRef,
+          tableColumns: tableColumns,
         ));
       }
     }
