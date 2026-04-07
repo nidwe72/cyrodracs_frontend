@@ -164,6 +164,64 @@ class AppConfigNode {
           ));
         }
 
+        // Parse AddAction for GRID elements
+        final addActionRaw = elem['addAction'] as Map<String, dynamic>?;
+        AppConfigNode? addActionNode;
+        if (addActionRaw != null && addActionRaw['targetDataFormRef'] != null) {
+          final bindingsRaw = (addActionRaw['contextBindings'] as List<dynamic>?) ?? [];
+          final bindingNodes = <AppConfigNode>[];
+          for (final b in bindingsRaw) {
+            final bm = b as Map<String, dynamic>;
+            bindingNodes.add(AppConfigNode(
+              label: bm['code'] as String? ?? '',
+              kind: AppConfigNodeKind.instance,
+              id: (bm['id'] as num?)?.toInt(),
+              typeCode: 'ContextBinding',
+              children: [
+                AppConfigNode(
+                  label: bm['target'] as String? ?? '',
+                  kind: AppConfigNodeKind.instance,
+                  typeCode: 'ContextBindingTarget',
+                  children: const [],
+                ),
+                AppConfigNode(
+                  label: bm['source'] as String? ?? '',
+                  kind: AppConfigNodeKind.instance,
+                  typeCode: 'ContextBindingSource',
+                  children: const [],
+                ),
+              ],
+            ));
+          }
+          addActionNode = AppConfigNode(
+            label: addActionRaw['code'] as String? ?? 'addAction',
+            kind: AppConfigNodeKind.instance,
+            id: (addActionRaw['id'] as num?)?.toInt(),
+            typeCode: 'AddAction',
+            children: [
+              AppConfigNode(
+                label: addActionRaw['targetDataFormRef'] as String? ?? '',
+                kind: AppConfigNodeKind.instance,
+                typeCode: 'AddActionTarget',
+                children: const [],
+              ),
+              if (addActionRaw['childLabel'] != null)
+                AppConfigNode(
+                  label: addActionRaw['childLabel'] as String,
+                  kind: AppConfigNodeKind.instance,
+                  typeCode: 'AddActionLabel',
+                  children: const [],
+                ),
+              AppConfigNode(
+                label: 'contextBindings',
+                kind: AppConfigNodeKind.collection,
+                childTypeCode: 'ContextBinding',
+                children: bindingNodes,
+              ),
+            ],
+          );
+        }
+
         final elemChildren = <AppConfigNode>[];
         if (elemType == 'GRID' || gridColumnNodes.isNotEmpty) {
           elemChildren.add(AppConfigNode(
@@ -173,6 +231,9 @@ class AppConfigNode {
             parentId: elemId,
             children: gridColumnNodes,
           ));
+        }
+        if (addActionNode != null) {
+          elemChildren.add(addActionNode);
         }
 
         elementNodes.add(AppConfigNode(

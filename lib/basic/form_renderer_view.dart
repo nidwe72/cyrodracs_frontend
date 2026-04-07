@@ -6,13 +6,46 @@ import 'package:http/http.dart' as http;
 import '../app_config_editor/app_config_service.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
+import '../models/editor_stack.dart';
 import '../theme/app_theme.dart';
+
+/// Callback for GRID add/edit actions: pushes a child editor.
+typedef GridActionCallback = void Function({
+  required String targetDataFormRef,
+  int? entityId,
+  Map<String, dynamic> contextBindings,
+  String? childLabel,
+  String? sourceElementCode,
+});
+
+/// Callback for GRID delete actions.
+typedef GridDeleteCallback = Future<bool> Function({
+  required String dataFormCode,
+  required String elementCode,
+  required int entityId,
+});
 
 class FormRendererView extends StatefulWidget {
   final DataForm form;
   final int? entityId;
   final Map<String, dynamic>? initialValues;
   final VoidCallback? onSaved;
+  /// Called before persistence with the form values and display-friendly values.
+  /// Return true to proceed with normal persistence, false to skip (caller handles it).
+  final Future<bool> Function(Map<String, dynamic> values, Map<String, dynamic> displayValues)? onBeforeSave;
+  /// Context bindings from EditorStack: field code → resolved value.
+  /// Fields present here are rendered as read-only.
+  final Map<String, dynamic> contextBindings;
+  /// Callback to push a child editor from a GRID add/edit action.
+  final GridActionCallback? onGridAction;
+  /// Callback to delete a GRID row entity.
+  final GridDeleteCallback? onGridDelete;
+  /// Called whenever a form field value changes. Used to keep EditorFrame.formState up to date.
+  final void Function(Map<String, dynamic> values)? onValuesChanged;
+  /// Pending children grouped by source element code. Used when parent has no ID.
+  final Map<String, List<PendingChild>> pendingChildrenByElement;
+  /// Callback to remove a pending child by element code and index.
+  final void Function(String elementCode, int index)? onRemovePending;
 
   const FormRendererView({
     super.key,
@@ -20,6 +53,13 @@ class FormRendererView extends StatefulWidget {
     this.entityId,
     this.initialValues,
     this.onSaved,
+    this.onBeforeSave,
+    this.contextBindings = const {},
+    this.onGridAction,
+    this.onGridDelete,
+    this.onValuesChanged,
+    this.pendingChildrenByElement = const {},
+    this.onRemovePending,
   });
 
   @override
@@ -29,14 +69,23 @@ class FormRendererView extends StatefulWidget {
 class _FormRendererViewState extends State<FormRendererView> {
   final _formKey = GlobalKey<FormState>();
   final Map<String, dynamic> _values = {};
+  final Map<String, String> _displayLabels = {}; // entity select labels for display
   String? _submitResult;
+
+  void _updateValue(String key, dynamic value) {
+    _values[key] = value;
+    widget.onValuesChanged?.call(Map<String, dynamic>.from(_values));
+  }
 
   @override
   void initState() {
     super.initState();
     final initial = widget.initialValues;
     for (final e in widget.form.elements) {
-      if (initial != null && initial.containsKey(e.key)) {
+      // Context-bound fields get their value from the binding, overriding initial
+      if (widget.contextBindings.containsKey(e.key)) {
+        _values[e.key] = widget.contextBindings[e.key];
+      } else if (initial != null && initial.containsKey(e.key)) {
         _values[e.key] = initial[e.key];
       } else {
         _values[e.key] = switch (e.type) {
@@ -82,10 +131,25 @@ class _FormRendererViewState extends State<FormRendererView> {
       _values.entries.where((e) => formKeys.contains(e.key)),
     );
 
+    // Check if caller wants to intercept (e.g., collect as pending instead of persisting)
+    if (widget.onBeforeSave != null) {
+      final shouldPersist = await widget.onBeforeSave!(filteredValues, Map<String, String>.from(_displayLabels));
+      if (!shouldPersist) return; // Caller handled it
+    }
+
+    // Collect all pending children from all elements
+    final allPending = <Map<String, dynamic>>[];
+    for (final entry in widget.pendingChildrenByElement.entries) {
+      for (final pending in entry.value) {
+        allPending.add(pending.toJson());
+      }
+    }
+
     final body = <String, dynamic>{
       'dataFormCode': widget.form.code,
       'values': filteredValues,
       if (widget.entityId != null) 'entityId': widget.entityId,
+      if (allPending.isNotEmpty) 'pendingChildren': allPending,
     };
     try {
       final response = await http.post(
@@ -101,7 +165,15 @@ class _FormRendererViewState extends State<FormRendererView> {
         });
         widget.onSaved?.call();
       } else {
-        setState(() => _submitResult = 'Error: HTTP ${response.statusCode}\n${response.body}');
+        // Parse error message from structured response
+        String errorMsg;
+        try {
+          final errorBody = jsonDecode(response.body) as Map<String, dynamic>;
+          errorMsg = errorBody['error'] as String? ?? 'Unknown error';
+        } catch (_) {
+          errorMsg = response.body;
+        }
+        setState(() => _submitResult = 'Error: $errorMsg');
       }
     } catch (e) {
       setState(() => _submitResult = 'Error: $e');
@@ -132,13 +204,58 @@ class _FormRendererViewState extends State<FormRendererView> {
   }
 
   Widget _buildField(DataFormElement e) {
+    // Context-bound fields are rendered as read-only
+    final isBound = widget.contextBindings.containsKey(e.key);
+    if (isBound) {
+      final boundValue = widget.contextBindings[e.key];
+      if (boundValue == null) {
+        // Parent has no ID yet — show placeholder
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: TextFormField(
+            initialValue: '(will be assigned on save)',
+            decoration: InputDecoration(
+              labelText: e.label,
+              suffixIcon: const Icon(Icons.lock, size: 16, color: Colors.grey),
+            ),
+            enabled: false,
+          ),
+        );
+      }
+      if (e.type == DataFormElementType.entitySelect) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: _EntitySelectField(
+            label: e.label,
+            providerCode: e.entityProviderRef ?? '',
+            rendererCode: e.entityRendererRef ?? '',
+            initialValue: int.tryParse(boundValue.toString()),
+            onChanged: (_) {},
+            onSaved: (_) {},
+            readOnly: true,
+          ),
+        );
+      }
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: TextFormField(
+          initialValue: boundValue.toString(),
+          decoration: InputDecoration(
+            labelText: e.label,
+            suffixIcon: const Icon(Icons.lock, size: 16, color: Colors.grey),
+          ),
+          enabled: false,
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: switch (e.type) {
         DataFormElementType.inputString => TextFormField(
             initialValue: _values[e.key]?.toString(),
             decoration: InputDecoration(labelText: e.label),
-            onSaved: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.inputNumber => TextFormField(
             decoration: InputDecoration(labelText: e.label),
@@ -148,11 +265,12 @@ class _FormRendererViewState extends State<FormRendererView> {
         DataFormElementType.inputEmail => TextFormField(
             decoration: InputDecoration(labelText: e.label),
             keyboardType: TextInputType.emailAddress,
-            onSaved: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.inputPassword => _PasswordField(
             label: e.label,
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.textarea => TextFormField(
             decoration: InputDecoration(
@@ -161,69 +279,69 @@ class _FormRendererViewState extends State<FormRendererView> {
               alignLabelWithHint: true,
             ),
             maxLines: e.rows ?? 3,
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.select => DropdownButtonFormField<String>(
             decoration: InputDecoration(labelText: e.label),
             items: e.options.map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
-            onChanged: (v) => _values[e.key] = v,
-            onSaved: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.multiSelect => _MultiSelectField(
             label: e.label,
             options: e.options,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.checkboxGroup => _CheckboxGroupField(
             label: e.label,
             options: e.options,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.radioGroup => _RadioGroupField(
             label: e.label,
             options: e.options,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.checkbox => _CheckboxField(
             label: e.label,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.toggle => _ToggleField(
             label: e.label,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.datePicker => _DateField(
             label: e.label,
             initialValue: _values[e.key]?.toString(),
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.timePicker => _TimeField(
             label: e.label,
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.dateTimePicker => _DateTimeField(
             label: e.label,
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.dateRangePicker => _DateRangeField(
             label: e.label,
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.slider => _SliderField(
             label: e.label,
             min: e.min ?? 0.0,
             max: e.max ?? 100.0,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.rating => _RatingField(
             label: e.label,
             max: e.max?.toInt() ?? 5,
-            onChanged: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.datePickerYearMonth => _YearMonthField(
             label: e.label,
             initialValue: _values[e.key]?.toString(),
-            onSaved: (v) => _values[e.key] = v,
+            onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.entitySelect => _EntitySelectField(
             label: e.label,
@@ -232,8 +350,9 @@ class _FormRendererViewState extends State<FormRendererView> {
             initialValue: _values[e.key] != null
                 ? int.tryParse(_values[e.key].toString())
                 : null,
-            onChanged: (v) => _values[e.key] = v,
-            onSaved: (v) => _values[e.key] = v,
+            onChanged: (v) => _updateValue(e.key, v),
+            onSaved: (v) => _updateValue(e.key, v),
+            onLabelChanged: (label) => _displayLabels[e.key] = label,
           ),
         DataFormElementType.grid => _GridField(
             label: e.label,
@@ -242,6 +361,60 @@ class _FormRendererViewState extends State<FormRendererView> {
             entityId: widget.entityId,
             formState: _values,
             tableColumns: e.tableColumns,
+            addAction: e.addAction,
+            onAddAction: widget.onGridAction != null && e.addAction != null
+                ? () {
+                    final action = e.addAction!;
+                    // Resolve context bindings: ENTITY → parent entity ID
+                    final resolved = <String, dynamic>{};
+                    for (final b in action.contextBindings) {
+                      if (b.source == 'ENTITY') {
+                        resolved[b.target] = widget.entityId;
+                      }
+                      // Future: ENTITY.fieldPath support
+                    }
+                    widget.onGridAction!(
+                      targetDataFormRef: action.targetDataFormRef,
+                      contextBindings: resolved,
+                      childLabel: action.childLabel != null
+                          ? 'New ${action.childLabel}'
+                          : null,
+                      sourceElementCode: e.key,
+                    );
+                  }
+                : null,
+            onEditAction: widget.onGridAction != null && e.addAction != null
+                ? (int rowEntityId) {
+                    final action = e.addAction!;
+                    final resolved = <String, dynamic>{};
+                    for (final b in action.contextBindings) {
+                      if (b.source == 'ENTITY') {
+                        resolved[b.target] = widget.entityId;
+                      }
+                    }
+                    widget.onGridAction!(
+                      targetDataFormRef: action.targetDataFormRef,
+                      entityId: rowEntityId,
+                      contextBindings: resolved,
+                      childLabel: action.childLabel,
+                      sourceElementCode: e.key,
+                    );
+                  }
+                : null,
+            onDeleteAction: widget.onGridDelete != null
+                ? (int rowEntityId) async {
+                    final success = await widget.onGridDelete!(
+                      dataFormCode: widget.form.code ?? '',
+                      elementCode: e.key,
+                      entityId: rowEntityId,
+                    );
+                    return success;
+                  }
+                : null,
+            pendingRows: widget.pendingChildrenByElement[e.key] ?? const [],
+            onRemovePending: widget.onRemovePending != null
+                ? (int index) => widget.onRemovePending!(e.key, index)
+                : null,
           ),
       },
     );
@@ -983,6 +1156,8 @@ class _EntitySelectField extends StatefulWidget {
   final int? initialValue;
   final void Function(int?) onChanged;
   final void Function(int?) onSaved;
+  final bool readOnly;
+  final void Function(String label)? onLabelChanged;
 
   const _EntitySelectField({
     required this.label,
@@ -991,6 +1166,8 @@ class _EntitySelectField extends StatefulWidget {
     this.initialValue,
     required this.onChanged,
     required this.onSaved,
+    this.readOnly = false,
+    this.onLabelChanged,
   });
 
   @override
@@ -1067,6 +1244,21 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       ..._options.map((o) => DropdownMenuItem(value: o.id, child: Text(o.label))),
     ];
 
+    if (widget.readOnly) {
+      final selectedLabel = _options
+          .where((o) => o.id == _selectedId)
+          .map((o) => o.label)
+          .firstOrNull ?? '(none)';
+      return TextFormField(
+        initialValue: selectedLabel,
+        decoration: InputDecoration(
+          labelText: widget.label,
+          suffixIcon: const Icon(Icons.lock, size: 16, color: Colors.grey),
+        ),
+        enabled: false,
+      );
+    }
+
     return DropdownButtonFormField<int>(
       value: _options.any((o) => o.id == _selectedId) ? _selectedId : null,
       decoration: InputDecoration(
@@ -1077,6 +1269,10 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       onChanged: (v) {
         setState(() => _selectedId = v);
         widget.onChanged(v);
+        if (v != null && widget.onLabelChanged != null) {
+          final match = _options.where((o) => o.id == v).firstOrNull;
+          if (match != null) widget.onLabelChanged!(match.label);
+        }
       },
       onSaved: (_) => widget.onSaved(_selectedId),
     );
@@ -1094,6 +1290,12 @@ class _GridField extends StatefulWidget {
   final int? entityId;
   final Map<String, dynamic> formState;
   final List<GridTableColumn> tableColumns;
+  final AddActionConfig? addAction;
+  final VoidCallback? onAddAction;
+  final void Function(int entityId)? onEditAction;
+  final Future<bool> Function(int entityId)? onDeleteAction;
+  final List<PendingChild> pendingRows;
+  final void Function(int index)? onRemovePending;
 
   const _GridField({
     required this.label,
@@ -1102,6 +1304,12 @@ class _GridField extends StatefulWidget {
     this.entityId,
     required this.formState,
     required this.tableColumns,
+    this.addAction,
+    this.onAddAction,
+    this.onEditAction,
+    this.onDeleteAction,
+    this.pendingRows = const [],
+    this.onRemovePending,
   });
 
   @override
@@ -1116,6 +1324,93 @@ class _GridFieldState extends State<_GridField> {
   final int _pageSize = 10;
   int _totalCount = 0;
   int _totalPages = 0;
+
+  bool get _hasActions => widget.onEditAction != null || widget.onDeleteAction != null
+      || widget.onRemovePending != null;
+
+  List<Widget> _buildPendingTable() {
+    return [
+      SizedBox(
+        width: double.infinity,
+        child: DataTable(
+          columns: [
+            ...widget.tableColumns
+                .map((c) => DataColumn(label: Text(c.header))),
+            const DataColumn(label: Text('Actions')),
+          ],
+          rows: widget.pendingRows.asMap().entries.map((entry) {
+            final index = entry.key;
+            final pending = entry.value;
+            return DataRow(
+              color: WidgetStateProperty.all(Colors.amber.shade50),
+              cells: [
+                ...widget.tableColumns
+                    .map((c) => DataCell(
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '${pending.displayValues[c.key] ?? pending.values[c.key] ?? ''}',
+                            style: const TextStyle(fontStyle: FontStyle.italic),
+                          ),
+                          if (index == 0 && c == widget.tableColumns.first)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade200,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: const Text('pending', style: TextStyle(fontSize: 10)),
+                              ),
+                            ),
+                        ],
+                      ),
+                    )),
+                DataCell(
+                  IconButton(
+                    icon: const Icon(Icons.close, size: AppTheme.iconSize, color: Colors.red),
+                    tooltip: 'Remove',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: widget.onRemovePending != null
+                        ? () => widget.onRemovePending!(index)
+                        : null,
+                  ),
+                ),
+              ],
+            );
+          }).toList(),
+        ),
+      ),
+    ];
+  }
+
+  Future<void> _confirmDelete(int rowId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm delete'),
+        content: const Text('Remove this entry?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && widget.onDeleteAction != null) {
+      final success = await widget.onDeleteAction!(rowId);
+      if (success) _fetchData();
+    }
+  }
 
   @override
   void initState() {
@@ -1213,6 +1508,16 @@ class _GridFieldState extends State<_GridField> {
                     ),
                   ],
                   const Spacer(),
+                  if (widget.onAddAction != null)
+                    IconButton(
+                      icon: const Icon(Icons.add, size: AppTheme.iconSize),
+                      tooltip: 'Add',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: widget.onAddAction,
+                    ),
+                  if (widget.onAddAction != null)
+                    const SizedBox(width: AppTheme.spacingSm),
                   if (widget.entityId != null)
                     IconButton(
                       icon: const Icon(Icons.refresh, size: AppTheme.iconSize),
@@ -1225,14 +1530,17 @@ class _GridFieldState extends State<_GridField> {
               ),
             ),
           // Content
-          if (widget.entityId == null)
-            Padding(
-              padding: const EdgeInsets.all(AppTheme.spacingMd),
-              child: const Text(
-                'Save the record first to see related entries.',
+          if (widget.entityId == null && widget.pendingRows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(AppTheme.spacingMd),
+              child: Text(
+                'No entries yet. Use + to add.',
                 style: TextStyle(color: Colors.grey),
               ),
             )
+          else if (widget.entityId == null && widget.pendingRows.isNotEmpty)
+            // Show only pending rows (parent not saved yet)
+            ..._buildPendingTable()
           else if (_loading)
             const Center(child: Padding(
               padding: EdgeInsets.all(AppTheme.spacingLg),
@@ -1259,17 +1567,44 @@ class _GridFieldState extends State<_GridField> {
             SizedBox(
               width: double.infinity,
               child: DataTable(
-                columns: widget.tableColumns
-                    .map((c) => DataColumn(label: Text(c.header)))
-                    .toList(),
+                columns: [
+                  ...widget.tableColumns
+                      .map((c) => DataColumn(label: Text(c.header))),
+                  if (_hasActions)
+                    const DataColumn(label: Text('Actions')),
+                ],
                 rows: _rows.asMap().entries.map((entry) {
                   final index = entry.key;
                   final row = entry.value;
+                  final rowId = row['id'] != null ? (row['id'] as num).toInt() : null;
                   return DataRow(
                     color: AppTheme.stripeColor(index),
-                    cells: widget.tableColumns
-                        .map((c) => DataCell(Text('${row[c.key] ?? ''}')))
-                        .toList(),
+                    cells: [
+                      ...widget.tableColumns
+                          .map((c) => DataCell(Text('${row[c.key] ?? ''}'))),
+                      if (_hasActions)
+                        DataCell(Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (widget.onEditAction != null && rowId != null)
+                              IconButton(
+                                icon: const Icon(Icons.edit, size: AppTheme.iconSize),
+                                tooltip: 'Edit',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () => widget.onEditAction!(rowId),
+                              ),
+                            if (widget.onDeleteAction != null && rowId != null)
+                              IconButton(
+                                icon: const Icon(Icons.delete, size: AppTheme.iconSize, color: Colors.red),
+                                tooltip: 'Delete',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () => _confirmDelete(rowId),
+                              ),
+                          ],
+                        )),
+                    ],
                   );
                 }).toList(),
               ),
@@ -1277,7 +1612,7 @@ class _GridFieldState extends State<_GridField> {
             // Pagination
             if (_totalPages > 1)
               Padding(
-                padding: EdgeInsets.only(
+                padding: const EdgeInsets.only(
                   top: AppTheme.spacingSm,
                   bottom: AppTheme.spacingSm,
                   right: AppTheme.spacingSm,

@@ -21,6 +21,24 @@ enum DataFormElementType {
   grid,
 }
 
+class AddActionContextBinding {
+  final String target;
+  final String source;
+  const AddActionContextBinding({required this.target, required this.source});
+}
+
+class AddActionConfig {
+  final String targetDataFormRef;
+  final String? childLabel;
+  final List<AddActionContextBinding> contextBindings;
+
+  const AddActionConfig({
+    required this.targetDataFormRef,
+    this.childLabel,
+    this.contextBindings = const [],
+  });
+}
+
 class GridTableColumn {
   final String key;
   final String header;
@@ -51,6 +69,7 @@ class DataFormElement {
   final int? rows;
   final List<GridTableColumn> tableColumns;
   final bool reloadOnChange;
+  final AddActionConfig? addAction;
 
   const DataFormElement({
     required this.key,
@@ -70,6 +89,7 @@ class DataFormElement {
     this.rows,
     this.tableColumns = const [],
     this.reloadOnChange = false,
+    this.addAction,
   });
 
   factory DataFormElement.fromJson(Map<String, dynamic> json) {

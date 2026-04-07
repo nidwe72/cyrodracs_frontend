@@ -6,6 +6,7 @@ import '../basic/form_renderer_view.dart';
 import '../models/app_config_node.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
+import '../models/editor_stack.dart';
 import '../theme/app_theme.dart';
 
 /// Converts a SCREAMING_SNAKE_CASE backend type value to the camelCase name
@@ -34,6 +35,7 @@ DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
                 }
                 // Parse GridTableColumns from tableColumns collection child
                 final tableColumns = <GridTableColumn>[];
+                AddActionConfig? addAction;
                 for (final elemChild in elem.children) {
                   if (elemChild.isCollection && elemChild.label == 'tableColumns') {
                     for (final colNode in elemChild.children) {
@@ -42,6 +44,37 @@ DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
                         header: colNode.viewNodeLabel ?? colNode.label,
                         entityRendererRef: colNode.entityRendererRef,
                       ));
+                    }
+                  } else if (elemChild.isInstance && elemChild.typeCode == 'AddAction') {
+                    // Parse AddAction with contextBindings
+                    String? targetRef;
+                    String? childLabel;
+                    final bindings = <AddActionContextBinding>[];
+                    for (final actionChild in elemChild.children) {
+                      if (actionChild.typeCode == 'AddActionTarget') {
+                        targetRef = actionChild.label;
+                      } else if (actionChild.typeCode == 'AddActionLabel') {
+                        childLabel = actionChild.label;
+                      } else if (actionChild.isCollection && actionChild.label == 'contextBindings') {
+                        for (final bindingNode in actionChild.children) {
+                          String? target;
+                          String? source;
+                          for (final bc in bindingNode.children) {
+                            if (bc.typeCode == 'ContextBindingTarget') target = bc.label;
+                            if (bc.typeCode == 'ContextBindingSource') source = bc.label;
+                          }
+                          if (target != null && source != null) {
+                            bindings.add(AddActionContextBinding(target: target, source: source));
+                          }
+                        }
+                      }
+                    }
+                    if (targetRef != null) {
+                      addAction = AddActionConfig(
+                        targetDataFormRef: targetRef,
+                        childLabel: childLabel,
+                        contextBindings: bindings,
+                      );
                     }
                   }
                 }
@@ -52,6 +85,7 @@ DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
                   entityProviderRef: elem.entityProviderRef,
                   entityRendererRef: elem.entityRendererRef,
                   tableColumns: tableColumns,
+                  addAction: addAction,
                 ));
               }
             }
@@ -140,8 +174,6 @@ class AppView extends StatefulWidget {
   State<AppView> createState() => _AppViewState();
 }
 
-enum _DetailMode { table, edit, staticPage }
-
 class _AppViewState extends State<AppView> {
   final _service = AppConfigService();
 
@@ -151,10 +183,8 @@ class _AppViewState extends State<AppView> {
   bool _loading = true;
   String? _error;
 
-  _DetailMode _mode = _DetailMode.table;
-  int? _editEntityId;
-  DataForm? _editForm;
-  Map<String, dynamic>? _editValues;
+  // Editor stack replaces the flat _mode/_editEntityId/_editForm/_editValues
+  final EditorStack _editorStack = EditorStack();
 
   // Pagination state
   int _page = 0;
@@ -189,7 +219,7 @@ class _AppViewState extends State<AppView> {
       _selectedDef = def;
       _loading = true;
       _error = null;
-      _mode = _DetailMode.table;
+      _editorStack.clear();
     });
     try {
       final response = await http.get(
@@ -237,12 +267,13 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  Future<void> _editEntity(int entityId) async {
-    final def = _selectedDef!;
-    if (def.dataFormRef == null) {
-      setState(() => _error = 'No dataForm configured for ${def.label}');
-      return;
-    }
+  Future<void> _pushEditor({
+    required String dataFormCode,
+    int? entityId,
+    String? label,
+    Map<String, dynamic> contextBindings = const {},
+    String? sourceElementCode,
+  }) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -253,27 +284,37 @@ class _AppViewState extends State<AppView> {
         setState(() { _error = 'AppConfig not loaded'; _loading = false; });
         return;
       }
-      final form = _buildDataFormByCode(root, def.dataFormRef!);
+      final form = _buildDataFormByCode(root, dataFormCode);
       if (form == null) {
-        setState(() { _error = 'DataForm "${def.dataFormRef}" not found'; _loading = false; });
+        setState(() { _error = 'DataForm "$dataFormCode" not found'; _loading = false; });
         return;
       }
 
-      final response = await http.get(
-        Uri.parse('http://localhost:8080/api/data-form-data/${form.code}/$entityId'),
-      );
-      if (response.statusCode != 200) {
-        setState(() { _error = 'Load failed: HTTP ${response.statusCode}'; _loading = false; });
-        return;
+      Map<String, dynamic>? values;
+      if (entityId != null) {
+        final response = await http.get(
+          Uri.parse('http://localhost:8080/api/data-form-data/${form.code}/$entityId'),
+        );
+        if (response.statusCode != 200) {
+          setState(() { _error = 'Load failed: HTTP ${response.statusCode}'; _loading = false; });
+          return;
+        }
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        values = (data['values'] as Map<String, dynamic>?) ?? {};
       }
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final values = (data['values'] as Map<String, dynamic>?) ?? {};
+
+      final frame = EditorFrame(
+        dataFormCode: dataFormCode,
+        entityId: entityId,
+        contextBindings: contextBindings,
+        breadcrumbLabel: label,
+        sourceElementCode: sourceElementCode,
+        form: form,
+        initialValues: values,
+      );
 
       setState(() {
-        _editEntityId = entityId;
-        _editForm = form;
-        _editValues = values;
-        _mode = _DetailMode.edit;
+        _editorStack.push(frame);
         _loading = false;
       });
     } catch (e) {
@@ -281,37 +322,78 @@ class _AppViewState extends State<AppView> {
     }
   }
 
-  Future<void> _addEntity() async {
-    final def = _selectedDef!;
-    if (def.dataFormRef == null) {
-      setState(() => _error = 'No dataForm configured for ${def.label}');
-      return;
+  void _popEditor({bool saved = false, Map<String, dynamic>? childValues, Map<String, dynamic>? childDisplayValues}) {
+    final poppedFrame = _editorStack.current;
+    setState(() {
+      _editorStack.pop();
+
+      // If child saved and parent exists: check if parent has no ID → collect as pending
+      if (saved && poppedFrame != null && _editorStack.isNotEmpty) {
+        final parentFrame = _editorStack.current!;
+        if (parentFrame.entityId == null && poppedFrame.sourceElementCode != null) {
+          // Parent has no ID — collect child as pending
+          // Find the contextBindingTarget (the field that would receive the parent ID)
+          String? bindingTarget;
+          for (final entry in poppedFrame.contextBindings.entries) {
+            bindingTarget = entry.key;
+            break; // First binding is the parent reference
+          }
+          if (bindingTarget != null && childValues != null) {
+            parentFrame.pendingChildren.add(PendingChild(
+              dataFormCode: poppedFrame.dataFormCode,
+              contextBindingTarget: bindingTarget,
+              values: childValues,
+              sourceElementCode: poppedFrame.sourceElementCode,
+              displayValues: childDisplayValues ?? {},
+            ));
+          }
+        }
+      }
+
+      if (_editorStack.isEmpty) {
+        // Back to list — reload entities
+        if (saved && _selectedDef != null) {
+          _fetchEntities(_selectedDef!, page: _page);
+        }
+      }
+    });
+  }
+
+  Future<void> _popToIndex(int index) async {
+    if (_editorStack.hasUnsavedChanges) {
+      final confirmed = await _showUnsavedChangesDialog();
+      if (!confirmed) return;
     }
     setState(() {
-      _loading = true;
-      _error = null;
+      if (index < 0) {
+        // Pop to list view
+        _editorStack.clear();
+      } else {
+        _editorStack.popTo(index);
+      }
     });
-    try {
-      final root = await _service.fetchTree();
-      if (root == null) {
-        setState(() { _error = 'AppConfig not loaded'; _loading = false; });
-        return;
-      }
-      final form = _buildDataFormByCode(root, def.dataFormRef!);
-      if (form == null) {
-        setState(() { _error = 'DataForm "${def.dataFormRef}" not found'; _loading = false; });
-        return;
-      }
-      setState(() {
-        _editEntityId = null;
-        _editForm = form;
-        _editValues = null;
-        _mode = _DetailMode.edit;
-        _loading = false;
-      });
-    } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
-    }
+  }
+
+  Future<bool> _showUnsavedChangesDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unsaved changes'),
+        content: const Text('You have unsaved changes. Discard and go back?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   void _onNodeActivated(_ViewDef def) {
@@ -320,11 +402,36 @@ class _AppViewState extends State<AppView> {
     } else if (def.type == 'STATIC_PAGE') {
       setState(() {
         _selectedDef = def;
-        _mode = _DetailMode.staticPage;
+        _editorStack.clear();
         _loading = false;
         _error = null;
       });
     }
+  }
+
+  void _editEntity(int entityId) {
+    final def = _selectedDef!;
+    if (def.dataFormRef == null) {
+      setState(() => _error = 'No dataForm configured for ${def.label}');
+      return;
+    }
+    _pushEditor(
+      dataFormCode: def.dataFormRef!,
+      entityId: entityId,
+      label: '${def.label} #$entityId',
+    );
+  }
+
+  void _addEntity() {
+    final def = _selectedDef!;
+    if (def.dataFormRef == null) {
+      setState(() => _error = 'No dataForm configured for ${def.label}');
+      return;
+    }
+    _pushEditor(
+      dataFormCode: def.dataFormRef!,
+      label: 'New ${def.label}',
+    );
   }
 
   @override
@@ -397,52 +504,139 @@ class _AppViewState extends State<AppView> {
       );
     }
 
-    if (_mode == _DetailMode.edit && _editForm != null) {
-      return _buildEditView();
+    return Column(
+      children: [
+        _buildStackPathTree(),
+        const Divider(height: 1),
+        Expanded(child: _buildContent()),
+      ],
+    );
+  }
+
+  /// Builds the vertical stack path tree above the editor area.
+  Widget _buildStackPathTree() {
+    final def = _selectedDef!;
+    final frames = _editorStack.frames;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      color: Colors.grey.shade50,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Root: ViewNode
+          _StackPathNode(
+            label: def.label,
+            depth: 0,
+            isActive: frames.isEmpty,
+            onTap: frames.isEmpty ? null : () => _popToIndex(-1),
+          ),
+          // Editor frames
+          for (int i = 0; i < frames.length; i++)
+            _StackPathNode(
+              label: frames[i].label,
+              depth: i + 1,
+              isActive: i == frames.length - 1,
+              onTap: i == frames.length - 1
+                  ? null
+                  : () => _popToIndex(i),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_editorStack.isNotEmpty) {
+      return _buildEditorView();
     }
 
-    if (_mode == _DetailMode.staticPage) {
+    final def = _selectedDef!;
+    if (def.type == 'STATIC_PAGE') {
       return _buildStaticPage();
     }
 
     return _buildEntityTable();
   }
 
-  Widget _buildEditView() {
-    final def = _selectedDef!;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          color: Colors.grey.shade100,
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back, size: 18),
-                tooltip: 'Back to list',
-                onPressed: () => _fetchEntities(def, page: _page),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                  _editEntityId != null
-                      ? 'Edit ${def.label} (id=$_editEntityId)'
-                      : 'Add ${def.label}',
-                  style: Theme.of(context).textTheme.titleSmall),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: FormRendererView(
-            key: ValueKey('edit-${def.code}-${_editEntityId ?? 'new'}'),
-            form: _editForm!,
-            entityId: _editEntityId,
-            initialValues: _editValues,
-            onSaved: () => _fetchEntities(def, page: _page),
-          ),
-        ),
-      ],
+  Widget _buildEditorView() {
+    final frame = _editorStack.current!;
+    if (frame.form == null) {
+      return const Center(child: Text('Form not loaded'));
+    }
+
+    // Build pending children map grouped by source element code
+    final pendingByElement = <String, List<PendingChild>>{};
+    for (final pending in frame.pendingChildren) {
+      final key = pending.sourceElementCode ?? '';
+      pendingByElement.putIfAbsent(key, () => []).add(pending);
+    }
+
+    // Check if this is a child frame where the parent has no ID
+    // In that case, the child should NOT persist — it should collect as pending
+    final bool isChildOfUnsavedParent = _editorStack.depth >= 2 &&
+        _editorStack.frames[_editorStack.depth - 2].entityId == null;
+
+    return FormRendererView(
+      key: ValueKey('edit-${frame.dataFormCode}-${frame.entityId ?? 'new'}-${_editorStack.depth}'),
+      form: frame.form!,
+      entityId: frame.entityId,
+      initialValues: frame.formState ?? frame.initialValues,
+      contextBindings: frame.contextBindings,
+      onValuesChanged: (values) {
+        frame.formState = values;
+      },
+      pendingChildrenByElement: pendingByElement,
+      onBeforeSave: isChildOfUnsavedParent
+          ? (Map<String, dynamic> values, Map<String, dynamic> displayValues) async {
+              // Don't persist to DB — collect as pending on parent frame
+              _popEditor(saved: true, childValues: values, childDisplayValues: displayValues);
+              return false; // Skip normal persistence
+            }
+          : null,
+      onSaved: () {
+        _popEditor(saved: true);
+      },
+      onGridAction: ({
+        required String targetDataFormRef,
+        int? entityId,
+        Map<String, dynamic> contextBindings = const {},
+        String? childLabel,
+        String? sourceElementCode,
+      }) {
+        _pushEditor(
+          dataFormCode: targetDataFormRef,
+          entityId: entityId,
+          label: childLabel,
+          contextBindings: contextBindings,
+          sourceElementCode: sourceElementCode,
+        );
+      },
+      onGridDelete: ({
+        required String dataFormCode,
+        required String elementCode,
+        required int entityId,
+      }) async {
+        try {
+          final response = await http.delete(
+            Uri.parse('http://localhost:8080/api/view/grid-data/$dataFormCode/$elementCode/$entityId'),
+          );
+          return response.statusCode == 200;
+        } catch (e) {
+          return false;
+        }
+      },
+      onRemovePending: (String elementCode, int index) {
+        setState(() {
+          final matching = frame.pendingChildren
+              .where((p) => p.sourceElementCode == elementCode)
+              .toList();
+          if (index < matching.length) {
+            frame.pendingChildren.remove(matching[index]);
+          }
+        });
+      },
     );
   }
 
@@ -539,7 +733,7 @@ class _AppViewState extends State<AppView> {
                                     onPressed: () => _editEntity(id),
                                   ),
                                 IconButton(
-                                  icon: Icon(Icons.delete, size: AppTheme.iconSize, color: Colors.red),
+                                  icon: const Icon(Icons.delete, size: AppTheme.iconSize, color: Colors.red),
                                   tooltip: 'Delete',
                                   onPressed: () => _confirmDelete(id, e['name']),
                                 ),
@@ -555,7 +749,7 @@ class _AppViewState extends State<AppView> {
             // Pagination
             if (_totalPages > 1)
               Padding(
-                padding: EdgeInsets.only(
+                padding: const EdgeInsets.only(
                   top: AppTheme.spacingSm,
                   bottom: AppTheme.spacingSm,
                   right: AppTheme.spacingSm,
@@ -624,6 +818,61 @@ class _AppViewState extends State<AppView> {
     if (confirmed == true) {
       _deleteEntity(id);
     }
+  }
+}
+
+/// A single node in the stack path tree rendered above the editor.
+class _StackPathNode extends StatelessWidget {
+  final String label;
+  final int depth;
+  final bool isActive;
+  final VoidCallback? onTap;
+
+  const _StackPathNode({
+    required this.label,
+    required this.depth,
+    required this.isActive,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(left: depth * 20.0),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isActive ? Icons.circle : Icons.play_arrow,
+                size: 10,
+                color: isActive ? Colors.blue.shade700 : Colors.grey.shade600,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                  color: isActive
+                      ? Colors.blue.shade700
+                      : onTap != null
+                          ? Colors.blue.shade400
+                          : Colors.grey.shade600,
+                  decoration: onTap != null && !isActive
+                      ? TextDecoration.underline
+                      : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
