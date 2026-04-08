@@ -712,33 +712,57 @@ class _AppViewState extends State<AppView> {
                     width: double.infinity,
                     child: DataTable(
                       columns: [
-                        ...def.columns.map((c) => DataColumn(label: Text(c.header))),
-                        const DataColumn(label: Text('Actions')),
+                        if (def.columns.isNotEmpty)
+                          AppTheme.headerWithActionsOffset(def.columns.first.header),
+                        ...def.columns.skip(1).map((c) => DataColumn(label: Text(c.header))),
                       ],
                       rows: _entities.asMap().entries.map((entry) {
                         final index = entry.key;
                         final e = entry.value;
                         final id = (e['id'] as num).toInt();
+                        final lastColIndex = def.columns.length - 1;
+                        final deleteAction = AppTheme.actionIcon(
+                          icon: Icons.delete,
+                          tooltip: 'Delete',
+                          onTap: () => _confirmDelete(id, e['name']),
+                        );
+                        final editActions = [
+                          if (def.dataFormRef != null)
+                            AppTheme.actionIcon(
+                              icon: Icons.edit,
+                              tooltip: 'Edit',
+                              onTap: () => _editEntity(id),
+                            ),
+                        ];
                         return DataRow(
                           color: AppTheme.stripeColor(index),
                           cells: [
-                            ...def.columns.map((c) => DataCell(Text('${e[c.key] ?? ''}'))),
-                            DataCell(Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (def.dataFormRef != null)
-                                  IconButton(
-                                    icon: const Icon(Icons.edit, size: AppTheme.iconSize),
-                                    tooltip: 'Edit',
-                                    onPressed: () => _editEntity(id),
-                                  ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete, size: AppTheme.iconSize, color: Colors.red),
-                                  tooltip: 'Delete',
-                                  onPressed: () => _confirmDelete(id, e['name']),
-                                ),
-                              ],
-                            )),
+                            if (def.columns.length == 1)
+                              // Single column: edit + data + delete all in one cell
+                              DataCell(Row(
+                                children: [
+                                  ...editActions,
+                                  if (editActions.isNotEmpty) const SizedBox(width: 8),
+                                  Expanded(child: Text('${e[def.columns.first.key] ?? ''}', overflow: TextOverflow.ellipsis)),
+                                  const SizedBox(width: 8),
+                                  deleteAction,
+                                ],
+                              )),
+                            if (def.columns.length > 1) ...[
+                              // First column: edit icon + data
+                              AppTheme.cellWithActions(
+                                '${e[def.columns.first.key] ?? ''}',
+                                editActions,
+                              ),
+                              // Middle data columns
+                              ...def.columns.skip(1).take(lastColIndex > 0 ? lastColIndex - 1 : 0)
+                                  .map((c) => DataCell(Text('${e[c.key] ?? ''}'))),
+                              // Last column: data + delete icon
+                              AppTheme.cellWithTrailingActions(
+                                '${e[def.columns.last.key] ?? ''}',
+                                [deleteAction],
+                              ),
+                            ],
                           ],
                         );
                       }).toList(),
@@ -909,7 +933,7 @@ class _TreeNode extends StatelessWidget {
               color: Colors.grey,
             ),
             const SizedBox(width: 8),
-            Text(label),
+            Expanded(child: Text(label, overflow: TextOverflow.ellipsis)),
           ],
         ),
       ),

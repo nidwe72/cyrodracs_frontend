@@ -1325,9 +1325,6 @@ class _GridFieldState extends State<_GridField> {
   int _totalCount = 0;
   int _totalPages = 0;
 
-  bool get _hasActions => widget.onEditAction != null || widget.onDeleteAction != null
-      || widget.onRemovePending != null;
-
   List<Widget> _buildPendingTable() {
     return [
       SizedBox(
@@ -1336,7 +1333,6 @@ class _GridFieldState extends State<_GridField> {
           columns: [
             ...widget.tableColumns
                 .map((c) => DataColumn(label: Text(c.header))),
-            const DataColumn(label: Text('Actions')),
           ],
           rows: widget.pendingRows.asMap().entries.map((entry) {
             final index = entry.key;
@@ -1344,7 +1340,8 @@ class _GridFieldState extends State<_GridField> {
             return DataRow(
               color: WidgetStateProperty.all(Colors.amber.shade50),
               cells: [
-                ...widget.tableColumns
+                // Data columns (except last)
+                ...widget.tableColumns.take(widget.tableColumns.length > 1 ? widget.tableColumns.length - 1 : 1)
                     .map((c) => DataCell(
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1368,17 +1365,20 @@ class _GridFieldState extends State<_GridField> {
                         ],
                       ),
                     )),
-                DataCell(
-                  IconButton(
-                    icon: const Icon(Icons.close, size: AppTheme.iconSize, color: Colors.red),
-                    tooltip: 'Remove',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: widget.onRemovePending != null
-                        ? () => widget.onRemovePending!(index)
-                        : null,
+                // Last column: data + remove icon
+                if (widget.tableColumns.length > 1)
+                  AppTheme.cellWithTrailingActions(
+                    '${pending.displayValues[widget.tableColumns.last.key] ?? pending.values[widget.tableColumns.last.key] ?? ''}',
+                    [
+                      AppTheme.actionIcon(
+                        icon: Icons.close,
+                        tooltip: 'Remove',
+                        onTap: widget.onRemovePending != null
+                            ? () => widget.onRemovePending!(index)
+                            : null,
+                      ),
+                    ],
                   ),
-                ),
               ],
             );
           }).toList(),
@@ -1568,42 +1568,57 @@ class _GridFieldState extends State<_GridField> {
               width: double.infinity,
               child: DataTable(
                 columns: [
-                  ...widget.tableColumns
+                  if (widget.tableColumns.isNotEmpty)
+                    AppTheme.headerWithActionsOffset(widget.tableColumns.first.header),
+                  ...widget.tableColumns.skip(1)
                       .map((c) => DataColumn(label: Text(c.header))),
-                  if (_hasActions)
-                    const DataColumn(label: Text('Actions')),
                 ],
                 rows: _rows.asMap().entries.map((entry) {
                   final index = entry.key;
                   final row = entry.value;
                   final rowId = row['id'] != null ? (row['id'] as num).toInt() : null;
+                  final lastColIndex = widget.tableColumns.length - 1;
+                  final editActions = [
+                    if (widget.onEditAction != null && rowId != null)
+                      AppTheme.actionIcon(
+                        icon: Icons.edit,
+                        tooltip: 'Edit',
+                        onTap: () => widget.onEditAction!(rowId),
+                      ),
+                  ];
+                  final deleteActions = [
+                    if (widget.onDeleteAction != null && rowId != null)
+                      AppTheme.actionIcon(
+                        icon: Icons.delete,
+                        tooltip: 'Delete',
+                        onTap: () => _confirmDelete(rowId),
+                      ),
+                  ];
                   return DataRow(
                     color: AppTheme.stripeColor(index),
                     cells: [
-                      ...widget.tableColumns
-                          .map((c) => DataCell(Text('${row[c.key] ?? ''}'))),
-                      if (_hasActions)
+                      if (widget.tableColumns.length == 1)
                         DataCell(Row(
-                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (widget.onEditAction != null && rowId != null)
-                              IconButton(
-                                icon: const Icon(Icons.edit, size: AppTheme.iconSize),
-                                tooltip: 'Edit',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () => widget.onEditAction!(rowId),
-                              ),
-                            if (widget.onDeleteAction != null && rowId != null)
-                              IconButton(
-                                icon: const Icon(Icons.delete, size: AppTheme.iconSize, color: Colors.red),
-                                tooltip: 'Delete',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () => _confirmDelete(rowId),
-                              ),
+                            ...editActions,
+                            if (editActions.isNotEmpty) const SizedBox(width: 8),
+                            Expanded(child: Text('${row[widget.tableColumns.first.key] ?? ''}', overflow: TextOverflow.ellipsis)),
+                            const SizedBox(width: 8),
+                            ...deleteActions,
                           ],
                         )),
+                      if (widget.tableColumns.length > 1) ...[
+                        AppTheme.cellWithActions(
+                          '${row[widget.tableColumns.first.key] ?? ''}',
+                          editActions,
+                        ),
+                        ...widget.tableColumns.skip(1).take(lastColIndex > 0 ? lastColIndex - 1 : 0)
+                            .map((c) => DataCell(Text('${row[c.key] ?? ''}'))),
+                        AppTheme.cellWithTrailingActions(
+                          '${row[widget.tableColumns.last.key] ?? ''}',
+                          deleteActions,
+                        ),
+                      ],
                     ],
                   );
                 }).toList(),
