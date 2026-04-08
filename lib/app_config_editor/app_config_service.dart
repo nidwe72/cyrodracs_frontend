@@ -345,6 +345,34 @@ class AppConfigService {
         .toList();
   }
 
+  /// Fetches filtered entity options via POST with form context.
+  Future<List<EntityOption>> fetchFilteredEntityOptions({
+    required String providerCode,
+    required String rendererCode,
+    required String dataFormCode,
+    int? entityId,
+    Map<String, String> formState = const {},
+  }) async {
+    final uri = Uri.parse('$_entitySelectBase/options');
+    final body = jsonEncode({
+      'provider': providerCode,
+      'renderer': rendererCode,
+      'dataFormCode': dataFormCode,
+      'entityId': entityId,
+      'formState': formState,
+    });
+    final response = await http.post(uri,
+        headers: {'Content-Type': 'application/json'}, body: body);
+    if (response.statusCode != 200) {
+      throw Exception(
+          'Failed to fetch filtered entity options: HTTP ${response.statusCode}');
+    }
+    final list = jsonDecode(response.body) as List<dynamic>;
+    return list
+        .map((e) => EntityOption.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   // ---------------------------------------------------------------------------
   // EntityProvider mutations
   // ---------------------------------------------------------------------------

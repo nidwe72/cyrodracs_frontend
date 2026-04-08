@@ -33,7 +33,7 @@ DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
                     type = DataFormElementType.values.byName(_toCamelCase(raw));
                   } catch (_) {}
                 }
-                // Parse GridTableColumns from tableColumns collection child
+                // Parse GridTableColumns and AddAction from children
                 final tableColumns = <GridTableColumn>[];
                 AddActionConfig? addAction;
                 for (final elemChild in elem.children) {
@@ -82,9 +82,13 @@ DataForm? _buildDataFormByCode(AppConfigNode root, String dataFormCode) {
                   key: elem.label,
                   label: elem.label,
                   type: type,
+                  dataBinding: elem.dataBinding,
+                  dataBindingNodeId: elem.dataBindingNodeId,
                   entityProviderRef: elem.entityProviderRef,
                   entityRendererRef: elem.entityRendererRef,
                   tableColumns: tableColumns,
+                  reloadOnChangeOf: elem.reloadOnChangeOf,
+                  mandatory: elem.mandatory,
                   addAction: addAction,
                 ));
               }

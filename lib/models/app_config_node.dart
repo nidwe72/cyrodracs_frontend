@@ -31,6 +31,10 @@ class AppConfigNode {
   final String? filterInjectableRef;   // Expression code ref on EntityProvider
   final int? filterInjectableRefNodeId;
 
+  // DataFormElement fields
+  final List<String> reloadOnChangeOf;  // sibling element codes that trigger reload
+  final bool mandatory;                  // field is required on save
+
   // ViewNode fields
   final String? viewNodeLabel;         // display label on ViewNode
   final int? viewNodeLabelNodeId;
@@ -65,6 +69,8 @@ class AppConfigNode {
     this.templateNodeId,
     this.filterInjectableRef,
     this.filterInjectableRefNodeId,
+    this.reloadOnChangeOf = const [],
+    this.mandatory = false,
     this.viewNodeLabel,
     this.viewNodeLabelNodeId,
     this.dataFormRef,
@@ -249,6 +255,8 @@ class AppConfigNode {
           entityProviderRefNodeId: (elem['entityProviderRefNodeId'] as num?)?.toInt(),
           entityRendererRef: elem['entityRendererRef'] as String?,
           entityRendererRefNodeId: (elem['entityRendererRefNodeId'] as num?)?.toInt(),
+          reloadOnChangeOf: (elem['reloadOnChangeOf'] as List<dynamic>?)?.cast<String>() ?? const [],
+          mandatory: elem['mandatory'] as bool? ?? false,
           children: elemChildren,
         ));
       }

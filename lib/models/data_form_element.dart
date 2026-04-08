@@ -68,7 +68,8 @@ class DataFormElement {
   final double? max;
   final int? rows;
   final List<GridTableColumn> tableColumns;
-  final bool reloadOnChange;
+  final List<String> reloadOnChangeOf;
+  final bool mandatory;
   final AddActionConfig? addAction;
 
   const DataFormElement({
@@ -88,7 +89,8 @@ class DataFormElement {
     this.max,
     this.rows,
     this.tableColumns = const [],
-    this.reloadOnChange = false,
+    this.reloadOnChangeOf = const [],
+    this.mandatory = false,
     this.addAction,
   });
 
@@ -119,7 +121,8 @@ class DataFormElement {
             );
           })
           .toList(),
-      reloadOnChange: json['reloadOnChange'] as bool? ?? false,
+      reloadOnChangeOf: (json['reloadOnChangeOf'] as List<dynamic>?)?.cast<String>() ?? [],
+      mandatory: json['mandatory'] as bool? ?? false,
     );
   }
 }

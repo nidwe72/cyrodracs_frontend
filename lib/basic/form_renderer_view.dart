@@ -70,11 +70,38 @@ class _FormRendererViewState extends State<FormRendererView> {
   final _formKey = GlobalKey<FormState>();
   final Map<String, dynamic> _values = {};
   final Map<String, String> _displayLabels = {}; // entity select labels for display
+  final Map<String, int> _reloadCounters = {}; // per-element reload counter for forcing rebuilds
   String? _submitResult;
 
   void _updateValue(String key, dynamic value) {
     _values[key] = value;
+    // Reset dependent elements that declare reloadOnChangeOf this key
+    for (final e in widget.form.elements) {
+      if (e.reloadOnChangeOf.contains(key)) {
+        _values[e.key] = null;
+        _displayLabels.remove(e.key);
+        _reloadCounters[e.key] = (_reloadCounters[e.key] ?? 0) + 1;
+      }
+    }
+    setState(() {});
     widget.onValuesChanged?.call(Map<String, dynamic>.from(_values));
+  }
+
+  /// Converts _values to Map<String, String> for the backend POST endpoint.
+  /// Uses dataBinding paths as keys (JPA field names) instead of element keys.
+  Map<String, String> _buildFormState() {
+    final result = <String, String>{};
+    for (final entry in _values.entries) {
+      if (entry.value != null) {
+        // Resolve the dataBinding path for this element key
+        final element = widget.form.elements
+            .where((e) => e.key == entry.key)
+            .firstOrNull;
+        final key = element?.dataBinding ?? entry.key;
+        result[key] = entry.value.toString();
+      }
+    }
+    return result;
   }
 
   @override
@@ -344,6 +371,7 @@ class _FormRendererViewState extends State<FormRendererView> {
             onSaved: (v) => _updateValue(e.key, v),
           ),
         DataFormElementType.entitySelect => _EntitySelectField(
+            key: ValueKey('${e.key}_${_reloadCounters[e.key] ?? 0}'),
             label: e.label,
             providerCode: e.entityProviderRef ?? '',
             rendererCode: e.entityRendererRef ?? '',
@@ -353,6 +381,9 @@ class _FormRendererViewState extends State<FormRendererView> {
             onChanged: (v) => _updateValue(e.key, v),
             onSaved: (v) => _updateValue(e.key, v),
             onLabelChanged: (label) => _displayLabels[e.key] = label,
+            dataFormCode: widget.form.code,
+            entityId: widget.entityId,
+            formState: _buildFormState(),
           ),
         DataFormElementType.grid => _GridField(
             label: e.label,
@@ -1158,8 +1189,12 @@ class _EntitySelectField extends StatefulWidget {
   final void Function(int?) onSaved;
   final bool readOnly;
   final void Function(String label)? onLabelChanged;
+  final String? dataFormCode;
+  final int? entityId;
+  final Map<String, String>? formState;
 
   const _EntitySelectField({
+    super.key,
     required this.label,
     required this.providerCode,
     required this.rendererCode,
@@ -1168,6 +1203,9 @@ class _EntitySelectField extends StatefulWidget {
     required this.onSaved,
     this.readOnly = false,
     this.onLabelChanged,
+    this.dataFormCode,
+    this.entityId,
+    this.formState,
   });
 
   @override
@@ -1197,8 +1235,19 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       return;
     }
     try {
-      final options = await _service.fetchEntityOptions(
-          widget.providerCode, widget.rendererCode);
+      final List<EntityOption> options;
+      if (widget.dataFormCode != null) {
+        options = await _service.fetchFilteredEntityOptions(
+          providerCode: widget.providerCode,
+          rendererCode: widget.rendererCode,
+          dataFormCode: widget.dataFormCode!,
+          entityId: widget.entityId,
+          formState: widget.formState ?? const {},
+        );
+      } else {
+        options = await _service.fetchEntityOptions(
+            widget.providerCode, widget.rendererCode);
+      }
       if (!mounted) return;
       setState(() {
         _options = options;
