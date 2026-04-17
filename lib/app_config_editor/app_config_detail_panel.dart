@@ -122,6 +122,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   String? _selectedEntityProviderRef;
   String? _selectedEntityRendererRef;
   String? _selectedFilterInjectableRef;
+  String? _selectedVisibilityExpressionRef;
   // Expression state
   String _selectedExpressionType = _kExpressionTypes.first;
   String _selectedInjectableBaseClass = _kInjectableBaseClasses.first;
@@ -183,6 +184,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _selectedEntityProviderRef = n?.entityProviderRef;
     _selectedEntityRendererRef = n?.entityRendererRef;
     _selectedFilterInjectableRef = n?.filterInjectableRef;
+    _selectedVisibilityExpressionRef = n?.visibilityExpressionRef;
     // Expression
     _selectedExpressionType = (n?.typeValue != null && _kExpressionTypes.contains(n!.typeValue))
         ? n.typeValue! : _kExpressionTypes.first;
@@ -1042,6 +1044,10 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             const SizedBox(height: 12),
             _entityRendererRefDropdown(),
           ],
+          if (n.hasTypeField) ...[
+            const SizedBox(height: 12),
+            _visibilityExpressionRefDropdown(),
+          ],
           if (n.hasTemplateField) ...[
             const SizedBox(height: 12),
             _templateField(),
@@ -1140,6 +1146,9 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     // EntityProvider filterInjectableRef
     final filterInjectableRefChanged = n.isEntityProvider
         && (_selectedFilterInjectableRef ?? '') != (n.filterInjectableRef ?? '');
+    // DataFormElement visibility expression ref
+    final visibilityExprRefChanged = n.hasTypeField
+        && (_selectedVisibilityExpressionRef ?? '') != (n.visibilityExpressionRef ?? '');
 
     if (!codeChanged && !typeChanged && !entityChanged && !dataBindingChanged
         && !providerRefChanged && !rendererRefChanged && !templateChanged
@@ -1149,7 +1158,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && !filterTypeChanged && !filterFieldChanged && !filterOperatorChanged && !filterValueChanged
         && !sortFieldChanged && !sortDirectionChanged
         && !exprTypeChanged && !exprBaseClassChanged && !exprBodyChanged && !exprDescChanged
-        && !filterInjectableRefChanged) {
+        && !filterInjectableRefChanged && !visibilityExprRefChanged) {
       return;
     }
 
@@ -1196,7 +1205,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             newEntityValue: entityChanged ? _selectedEntity : null,
           ));
     } else if (n.hasTypeField) {
-      await _run(() => widget.service.updateDataFormElementFull(
+      await _run(() async {
+        AppConfigNode? tree = await widget.service.updateDataFormElementFull(
             elementId: n.id!,
             elementCode: n.label,
             typeNodeId: n.typeNodeId,
@@ -1214,7 +1224,33 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             newEntityRendererRef: rendererRefChanged
                 ? (_selectedEntityRendererRef?.isEmpty ?? true ? null : _selectedEntityRendererRef)
                 : null,
-          ));
+          );
+        if (visibilityExprRefChanged) {
+          final ref = _selectedVisibilityExpressionRef;
+          if (n.visibilityExpressionRefNodeId != null) {
+            if (ref != null && ref.isNotEmpty) {
+              tree = await widget.service.updateNode(n.visibilityExpressionRefNodeId!, code: ref);
+            } else {
+              tree = await widget.service.deleteNode(n.visibilityExpressionRefNodeId!);
+            }
+          } else if (ref != null && ref.isNotEmpty) {
+            // Need to create VisibilityRule + VisibilityExpressionRef
+            tree = await widget.service.addNode(
+              parentObjectId: n.id!, typeCode: 'VisibilityRule',
+              code: '${n.label}_visibility',
+            );
+            // Find the newly created VisibilityRule node to add the ref child
+            final visRuleNode = tree?.findChild(n.id!, 'VisibilityRule');
+            if (visRuleNode != null) {
+              tree = await widget.service.addNode(
+                parentObjectId: visRuleNode.id!, typeCode: 'VisibilityExpressionRef',
+                code: ref,
+              );
+            }
+          }
+        }
+        return tree;
+      });
     } else if (n.isViewNode) {
       await _run(() async {
         AppConfigNode? tree;
@@ -1938,6 +1974,23 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       ),
       items: items,
       onChanged: (v) => setState(() => _selectedFilterInjectableRef = v),
+    );
+  }
+
+  Widget _visibilityExpressionRefDropdown() {
+    final codes = _expressionCodes();
+    final items = [
+      const DropdownMenuItem<String>(value: null, child: Text('(none — always visible)')),
+      ...codes.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+    ];
+    return DropdownButtonFormField<String>(
+      value: codes.contains(_selectedVisibilityExpressionRef) ? _selectedVisibilityExpressionRef : null,
+      decoration: const InputDecoration(
+        labelText: 'Visibility Expression (Boolean)',
+        isDense: true,
+      ),
+      items: items,
+      onChanged: (v) => setState(() => _selectedVisibilityExpressionRef = v),
     );
   }
 

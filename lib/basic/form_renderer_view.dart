@@ -71,20 +71,50 @@ class _FormRendererViewState extends State<FormRendererView> {
   final Map<String, dynamic> _values = {};
   final Map<String, String> _displayLabels = {}; // entity select labels for display
   final Map<String, int> _reloadCounters = {}; // per-element reload counter for forcing rebuilds
+  final Map<String, ElementState> _elementStates = {}; // central element state from evaluate endpoint
   String? _submitResult;
 
   void _updateValue(String key, dynamic value) {
     _values[key] = value;
     // Reset dependent elements that declare reloadOnChangeOf this key
-    for (final e in widget.form.elements) {
-      if (e.reloadOnChangeOf.contains(key)) {
-        _values[e.key] = null;
-        _displayLabels.remove(e.key);
-        _reloadCounters[e.key] = (_reloadCounters[e.key] ?? 0) + 1;
+    final hasDependents = widget.form.elements.any((e) => e.reloadOnChangeOf.contains(key));
+    if (hasDependents) {
+      for (final e in widget.form.elements) {
+        if (e.reloadOnChangeOf.contains(key)) {
+          _values[e.key] = null;
+          _displayLabels.remove(e.key);
+        }
       }
+      _evaluateForm(changedElement: key);
     }
     setState(() {});
     widget.onValuesChanged?.call(Map<String, dynamic>.from(_values));
+  }
+
+  Future<void> _evaluateForm({String? changedElement}) async {
+    final formCode = widget.form.code;
+    if (formCode == null) return;
+    try {
+      final service = AppConfigService();
+      final states = await service.fetchFormEvaluation(
+        dataFormCode: formCode,
+        entityId: widget.entityId,
+        changedElement: changedElement,
+        formState: _buildFormState(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _elementStates.addAll(states);
+        // Bump reload counters for elements whose options changed
+        for (final entry in states.entries) {
+          if (entry.value.options != null) {
+            _reloadCounters[entry.key] = (_reloadCounters[entry.key] ?? 0) + 1;
+          }
+        }
+      });
+    } catch (_) {
+      // Silently ignore evaluation errors — form remains functional
+    }
   }
 
   /// Converts _values to Map<String, String> for the backend POST endpoint.
@@ -126,6 +156,11 @@ class _FormRendererViewState extends State<FormRendererView> {
         };
       }
     }
+    // Initial evaluation: determine visibility and options for all elements.
+    // Deferred to after first frame to avoid setState during build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _evaluateForm();
+    });
   }
 
   void _onSubmit() {
@@ -207,10 +242,17 @@ class _FormRendererViewState extends State<FormRendererView> {
     }
   }
 
+  bool _isElementVisible(DataFormElement e) {
+    final state = _elementStates[e.key];
+    if (state == null) return true; // no state = visible by default
+    return state.visible;
+  }
+
   List<Widget> _buildRows() {
     final rows = <Widget>[];
     var group = <DataFormElement>[];
     for (final e in widget.form.elements) {
+      if (!_isElementVisible(e)) continue; // skip hidden elements
       if (e.breakBefore && group.isNotEmpty) {
         rows.add(_buildRow(group));
         group = [];
@@ -384,6 +426,7 @@ class _FormRendererViewState extends State<FormRendererView> {
             dataFormCode: widget.form.code,
             entityId: widget.entityId,
             formState: _buildFormState(),
+            preloadedOptions: _elementStates[e.key]?.options,
           ),
         DataFormElementType.grid => _GridField(
             label: e.label,
@@ -1192,6 +1235,7 @@ class _EntitySelectField extends StatefulWidget {
   final String? dataFormCode;
   final int? entityId;
   final Map<String, String>? formState;
+  final List<EntityOption>? preloadedOptions;
 
   const _EntitySelectField({
     super.key,
@@ -1206,6 +1250,7 @@ class _EntitySelectField extends StatefulWidget {
     this.dataFormCode,
     this.entityId,
     this.formState,
+    this.preloadedOptions,
   });
 
   @override
@@ -1223,7 +1268,12 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
   void initState() {
     super.initState();
     _selectedId = widget.initialValue;
-    _fetchOptions();
+    if (widget.preloadedOptions != null) {
+      _options = widget.preloadedOptions!;
+      _loading = false;
+    } else {
+      _fetchOptions();
+    }
   }
 
   Future<void> _fetchOptions() async {
@@ -1235,19 +1285,8 @@ class _EntitySelectFieldState extends State<_EntitySelectField> {
       return;
     }
     try {
-      final List<EntityOption> options;
-      if (widget.dataFormCode != null) {
-        options = await _service.fetchFilteredEntityOptions(
-          providerCode: widget.providerCode,
-          rendererCode: widget.rendererCode,
-          dataFormCode: widget.dataFormCode!,
-          entityId: widget.entityId,
-          formState: widget.formState ?? const {},
-        );
-      } else {
-        options = await _service.fetchEntityOptions(
-            widget.providerCode, widget.rendererCode);
-      }
+      final options = await _service.fetchEntityOptions(
+          widget.providerCode, widget.rendererCode);
       if (!mounted) return;
       setState(() {
         _options = options;

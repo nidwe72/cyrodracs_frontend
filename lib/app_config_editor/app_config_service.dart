@@ -42,6 +42,24 @@ class EntityOption {
   }
 }
 
+class ElementState {
+  final bool visible;
+  final List<EntityOption>? options;
+
+  const ElementState({required this.visible, this.options});
+
+  factory ElementState.fromJson(Map<String, dynamic> json) {
+    return ElementState(
+      visible: json['visible'] as bool? ?? true,
+      options: json['options'] != null
+          ? (json['options'] as List<dynamic>)
+              .map((e) => EntityOption.fromJson(e as Map<String, dynamic>))
+              .toList()
+          : null,
+    );
+  }
+}
+
 class BindingProposalResponse {
   final String entityLabel;
   final List<BindingCompletion> completions;
@@ -65,6 +83,7 @@ class AppConfigService {
   static const _base = 'http://localhost:8080/api/app-config';
   static const _bindingBase = 'http://localhost:8080/api/data-binding';
   static const _entitySelectBase = 'http://localhost:8080/api/entity-select';
+  static const _dataFormBase = 'http://localhost:8080/api/data-form';
 
   // ---------------------------------------------------------------------------
   // Read
@@ -345,32 +364,34 @@ class AppConfigService {
         .toList();
   }
 
-  /// Fetches filtered entity options via POST with form context.
-  Future<List<EntityOption>> fetchFilteredEntityOptions({
-    required String providerCode,
-    required String rendererCode,
+  // ---------------------------------------------------------------------------
+  // DataForm Evaluation
+  // ---------------------------------------------------------------------------
+
+  /// Evaluates visibility and options for affected elements via the unified endpoint.
+  Future<Map<String, ElementState>> fetchFormEvaluation({
     required String dataFormCode,
     int? entityId,
+    String? changedElement,
     Map<String, String> formState = const {},
   }) async {
-    final uri = Uri.parse('$_entitySelectBase/options');
+    final uri = Uri.parse('$_dataFormBase/evaluate');
     final body = jsonEncode({
-      'provider': providerCode,
-      'renderer': rendererCode,
       'dataFormCode': dataFormCode,
       'entityId': entityId,
+      'changedElement': changedElement,
       'formState': formState,
     });
     final response = await http.post(uri,
         headers: {'Content-Type': 'application/json'}, body: body);
     if (response.statusCode != 200) {
       throw Exception(
-          'Failed to fetch filtered entity options: HTTP ${response.statusCode}');
+          'Failed to evaluate form: HTTP ${response.statusCode}');
     }
-    final list = jsonDecode(response.body) as List<dynamic>;
-    return list
-        .map((e) => EntityOption.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final elements = json['elements'] as Map<String, dynamic>;
+    return elements.map((key, value) =>
+        MapEntry(key, ElementState.fromJson(value as Map<String, dynamic>)));
   }
 
   // ---------------------------------------------------------------------------

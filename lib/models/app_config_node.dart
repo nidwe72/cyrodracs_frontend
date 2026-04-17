@@ -34,6 +34,8 @@ class AppConfigNode {
   // DataFormElement fields
   final List<String> reloadOnChangeOf;  // sibling element codes that trigger reload
   final bool mandatory;                  // field is required on save
+  final String? visibilityExpressionRef;     // Expression code ref for visibility
+  final int? visibilityExpressionRefNodeId;
 
   // ViewNode fields
   final String? viewNodeLabel;         // display label on ViewNode
@@ -71,6 +73,8 @@ class AppConfigNode {
     this.filterInjectableRefNodeId,
     this.reloadOnChangeOf = const [],
     this.mandatory = false,
+    this.visibilityExpressionRef,
+    this.visibilityExpressionRefNodeId,
     this.viewNodeLabel,
     this.viewNodeLabelNodeId,
     this.dataFormRef,
@@ -257,6 +261,8 @@ class AppConfigNode {
           entityRendererRefNodeId: (elem['entityRendererRefNodeId'] as num?)?.toInt(),
           reloadOnChangeOf: (elem['reloadOnChangeOf'] as List<dynamic>?)?.cast<String>() ?? const [],
           mandatory: elem['mandatory'] as bool? ?? false,
+          visibilityExpressionRef: (elem['visibilityRule'] as Map<String, dynamic>?)?['expressionRef'] as String?,
+          visibilityExpressionRefNodeId: ((elem['visibilityRule'] as Map<String, dynamic>?)?['expressionRefNodeId'] as num?)?.toInt(),
           children: elemChildren,
         ));
       }
@@ -567,6 +573,26 @@ class AppConfigNode {
 
   /// Finds a DataFormElement by its parent DataForm's id and the element's code.
   /// Used after adding a new element to retrieve its assigned DB id.
+  /// Finds a direct child instance node of [parentId] with the given [typeCode].
+  AppConfigNode? findChild(int parentId, String typeCode) {
+    if (id == parentId) {
+      for (final child in children) {
+        if (child.isInstance && child.typeCode == typeCode) return child;
+        // Also check inside collection children
+        if (child.isCollection) {
+          for (final grandchild in child.children) {
+            if (grandchild.isInstance && grandchild.typeCode == typeCode) return grandchild;
+          }
+        }
+      }
+    }
+    for (final child in children) {
+      final found = child.findChild(parentId, typeCode);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
   AppConfigNode? findDataFormElement(int formId, String elementCode) {
     for (final child in children) {
       if (child.isCollection && child.label == 'dataForms') {
