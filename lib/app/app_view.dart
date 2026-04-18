@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:graphql/client.dart';
 import '../app_config_editor/app_config_service.dart';
+import '../graphql_client.dart';
 import '../basic/form_renderer_view.dart';
 import '../models/app_config_node.dart';
 import '../models/data_form.dart';
@@ -226,27 +226,27 @@ class _AppViewState extends State<AppView> {
       _editorStack.clear();
     });
     try {
-      final response = await http.get(
-        Uri.parse(
-          'http://localhost:8080/api/view/${def.code}/data?page=$page&size=$_pageSize',
-        ),
-      );
-      if (response.statusCode == 200) {
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
-        final items = (body['items'] as List<dynamic>).cast<Map<String, dynamic>>();
-        setState(() {
-          _entities = items;
-          _page = body['page'] as int;
-          _totalCount = body['totalCount'] as int;
-          _totalPages = body['totalPages'] as int;
-          _loading = false;
-        });
-      } else {
-        setState(() {
-          _error = 'HTTP ${response.statusCode}';
-          _loading = false;
-        });
-      }
+      final result = await graphqlClient.query(QueryOptions(
+        document: gql(r'''
+          query ViewData($viewNodeCode: String!, $page: Int, $size: Int) {
+            viewData(viewNodeCode: $viewNodeCode, page: $page, size: $size) {
+              items totalCount page pageSize totalPages
+            }
+          }
+        '''),
+        variables: {'viewNodeCode': def.code, 'page': page, 'size': _pageSize},
+        fetchPolicy: FetchPolicy.noCache,
+      ));
+      if (result.hasException) throw result.exception!;
+      final body = result.data!['viewData'] as Map<String, dynamic>;
+      final items = (body['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+      setState(() {
+        _entities = items;
+        _page = (body['page'] as num).toInt();
+        _totalCount = (body['totalCount'] as num).toInt();
+        _totalPages = (body['totalPages'] as num).toInt();
+        _loading = false;
+      });
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -258,14 +258,16 @@ class _AppViewState extends State<AppView> {
   Future<void> _deleteEntity(int id) async {
     final def = _selectedDef!;
     try {
-      final response = await http.delete(
-        Uri.parse('http://localhost:8080/api/view/${def.code}/$id'),
-      );
-      if (response.statusCode == 200) {
-        _fetchEntities(def, page: _page);
-      } else {
-        setState(() => _error = 'Delete failed: HTTP ${response.statusCode}');
-      }
+      final result = await graphqlClient.mutate(MutationOptions(
+        document: gql(r'''
+          mutation DeleteViewEntity($viewNodeCode: String!, $id: Int!) {
+            deleteViewEntity(viewNodeCode: $viewNodeCode, id: $id)
+          }
+        '''),
+        variables: {'viewNodeCode': def.code, 'id': id},
+      ));
+      if (result.hasException) throw result.exception!;
+      _fetchEntities(def, page: _page);
     } catch (e) {
       setState(() => _error = 'Delete failed: $e');
     }
@@ -296,14 +298,22 @@ class _AppViewState extends State<AppView> {
 
       Map<String, dynamic>? values;
       if (entityId != null) {
-        final response = await http.get(
-          Uri.parse('http://localhost:8080/api/data-form-data/${form.code}/$entityId'),
-        );
-        if (response.statusCode != 200) {
-          setState(() { _error = 'Load failed: HTTP ${response.statusCode}'; _loading = false; });
+        final result = await graphqlClient.query(QueryOptions(
+          document: gql(r'''
+            query LoadFormData($dataFormCode: String!, $entityId: Int!) {
+              dataFormData(dataFormCode: $dataFormCode, entityId: $entityId) {
+                values
+              }
+            }
+          '''),
+          variables: {'dataFormCode': form.code, 'entityId': entityId},
+          fetchPolicy: FetchPolicy.noCache,
+        ));
+        if (result.hasException) {
+          setState(() { _error = 'Load failed: ${result.exception}'; _loading = false; });
           return;
         }
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = result.data!['dataFormData'] as Map<String, dynamic>;
         values = (data['values'] as Map<String, dynamic>?) ?? {};
       }
 
@@ -623,10 +633,15 @@ class _AppViewState extends State<AppView> {
         required int entityId,
       }) async {
         try {
-          final response = await http.delete(
-            Uri.parse('http://localhost:8080/api/view/grid-data/$dataFormCode/$elementCode/$entityId'),
-          );
-          return response.statusCode == 200;
+          final result = await graphqlClient.mutate(MutationOptions(
+            document: gql(r'''
+              mutation DeleteGridEntity($dataFormCode: String!, $elementCode: String!, $entityId: Int!) {
+                deleteGridEntity(dataFormCode: $dataFormCode, elementCode: $elementCode, entityId: $entityId)
+              }
+            '''),
+            variables: {'dataFormCode': dataFormCode, 'elementCode': elementCode, 'entityId': entityId},
+          ));
+          return !result.hasException;
         } catch (e) {
           return false;
         }

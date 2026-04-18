@@ -33,6 +33,7 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   http: ^1.2.0
+  graphql: ^5.2.0
   flutter_bootstrap5: ^1.1.1+1
   date_picker_plus: 4.0.0
   re_editor: ^0.8.0

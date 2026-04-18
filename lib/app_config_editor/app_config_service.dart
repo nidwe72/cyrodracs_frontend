@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:graphql/client.dart';
 import '../models/app_config_node.dart';
 
 class BindingCompletion {
@@ -79,29 +78,131 @@ class BindingProposalResponse {
   }
 }
 
+// ---------------------------------------------------------------------------
+// GraphQL query fragments — define which fields to fetch
+// ---------------------------------------------------------------------------
+
+const _appConfigFields = r'''
+  fragment AppConfigFields on AppConfig {
+    id
+    code
+    dataForms {
+      id code entity
+      elements {
+        id code type dataBinding
+        entityProviderRef entityRendererRef
+        mandatory
+        reloadOnChangeOf
+        visibilityRule { expressionRef }
+        tableColumns { id code key header entityRendererRef }
+        addAction {
+          id code targetDataFormRef childLabel
+          contextBindings { id code target source }
+        }
+      }
+    }
+    entityProviders {
+      id code entityType
+      filterInjectableRef
+      filter { ...FilterFields }
+      sortFields { id code field direction }
+    }
+    entityRenderers { id code entityType template }
+    viewTree { ...ViewNodeFields }
+    expressions { id code type baseClass expression description }
+  }
+
+  fragment FilterFields on FilterNode {
+    id code type field operator value values expressionRef
+    children { id code type field operator value values expressionRef
+      children { id code type field operator value values expressionRef }
+    }
+  }
+
+  fragment ViewNodeFields on ViewNode {
+    id code type label entityProviderRef dataFormRef content
+    tableColumns { id code key header entityRendererRef }
+    children {
+      id code type label entityProviderRef dataFormRef content
+      tableColumns { id code key header entityRendererRef }
+      children {
+        id code type label entityProviderRef dataFormRef content
+        tableColumns { id code key header entityRendererRef }
+      }
+    }
+  }
+''';
+
 class AppConfigService {
-  static const _base = 'http://localhost:8080/api/app-config';
-  static const _bindingBase = 'http://localhost:8080/api/data-binding';
-  static const _entitySelectBase = 'http://localhost:8080/api/entity-select';
-  static const _dataFormBase = 'http://localhost:8080/api/data-form';
+  static final _client = GraphQLClient(
+    link: HttpLink('http://localhost:8080/graphql'),
+    cache: GraphQLCache(),
+  );
 
   // ---------------------------------------------------------------------------
   // Read
   // ---------------------------------------------------------------------------
 
   Future<AppConfigNode?> fetchTree() async {
-    final response = await http.get(Uri.parse(_base));
-    if (response.statusCode == 404) return null;
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load AppConfig: HTTP ${response.statusCode}');
+    final result = await _client.query(QueryOptions(
+      document: gql('''
+        query { appConfig { ...AppConfigFields } }
+        $_appConfigFields
+      '''),
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Failed to load AppConfig: ${result.exception}');
     }
     return AppConfigNode.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
+        result.data!['appConfig'] as Map<String, dynamic>);
   }
 
   // ---------------------------------------------------------------------------
   // Mutations – all return the updated tree on success
   // ---------------------------------------------------------------------------
+
+  Future<AppConfigNode?> _mutate(String mutation) async {
+    final result = await _client.mutate(MutationOptions(
+      document: gql('''
+        $mutation
+        $_appConfigFields
+      '''),
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Mutation failed: ${result.exception}');
+    }
+    // Find the first non-null operation result that returns AppConfigView
+    final data = result.data!;
+    for (final value in data.values) {
+      if (value is Map<String, dynamic> && value.containsKey('code')) {
+        return AppConfigNode.fromJson(value);
+      }
+    }
+    return null;
+  }
+
+  Future<AppConfigNode?> _mutateWithVars(String mutation, Map<String, dynamic> variables) async {
+    final result = await _client.mutate(MutationOptions(
+      document: gql('''
+        $mutation
+        $_appConfigFields
+      '''),
+      variables: variables,
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Mutation failed: ${result.exception}');
+    }
+    final data = result.data!;
+    for (final value in data.values) {
+      if (value is Map<String, dynamic> && value.containsKey('code')) {
+        return AppConfigNode.fromJson(value);
+      }
+    }
+    return null;
+  }
 
   Future<AppConfigNode?> addNode({
     required int? parentObjectId,
@@ -109,91 +210,84 @@ class AppConfigService {
     required String code,
     String? enumValue,
   }) async {
-    final body = <String, dynamic>{
-      'typeCode': typeCode,
-      'code': code,
-      if (parentObjectId != null) 'parentObjectId': parentObjectId,
-      if (enumValue != null) 'enumValue': enumValue,
-    };
-    final response = await http.post(
-      Uri.parse('$_base/node'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
+    return _mutateWithVars(
+      r'''
+        mutation AddNode($input: AddNodeInput!) {
+          addAppConfigNode(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'parentObjectId': parentObjectId,
+          'typeCode': typeCode,
+          'code': code,
+          if (enumValue != null) 'enumValue': enumValue,
+        },
+      },
     );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to add node: HTTP ${response.statusCode}');
-    }
-    return AppConfigNode.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
   }
 
-  /// Adds a DataFormElement and, when [typeValue] is provided, immediately
-  /// adds its DataFormElementType child in a second call.
   Future<AppConfigNode?> addDataFormElement({
     required int parentFormId,
     required String code,
     String? typeValue,
   }) async {
-    AppConfigNode? tree = await addNode(
-      parentObjectId: parentFormId,
-      typeCode: 'DataFormElement',
-      code: code,
-    );
-    if (tree == null || typeValue == null) return tree;
-
-    final newElem = tree.findDataFormElement(parentFormId, code);
-    if (newElem?.id == null) return tree;
-
-    return addNode(
-      parentObjectId: newElem!.id,
-      typeCode: 'DataFormElementType',
-      code: '${code}_type',
-      enumValue: typeValue,
+    return _mutateWithVars(
+      r'''
+        mutation AddElement($input: AddDataFormElementInput!) {
+          addDataFormElement(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'parentFormId': parentFormId,
+          'code': code,
+          if (typeValue != null) 'type': typeValue,
+        },
+      },
     );
   }
 
   Future<AppConfigNode?> deleteNode(int id) async {
-    final response = await http.delete(Uri.parse('$_base/node/$id'));
-    if (response.statusCode != 200) {
-      throw Exception('Failed to delete node: HTTP ${response.statusCode}');
-    }
-    return AppConfigNode.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
+    return _mutateWithVars(
+      r'''
+        mutation DeleteNode($id: Int!) {
+          deleteAppConfigNode(id: $id) { ...AppConfigFields }
+        }
+      ''',
+      {'id': id},
+    );
   }
 
   Future<AppConfigNode?> copyNode(int id, String newCode) async {
-    final response = await http.post(
-      Uri.parse('$_base/node/$id/copy'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'newCode': newCode}),
+    return _mutateWithVars(
+      r'''
+        mutation CopyNode($id: Int!, $newCode: String!) {
+          copyAppConfigNode(id: $id, newCode: $newCode) { ...AppConfigFields }
+        }
+      ''',
+      {'id': id, 'newCode': newCode},
     );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to copy node: HTTP ${response.statusCode}');
-    }
-    return AppConfigNode.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
   }
 
   Future<AppConfigNode?> updateNode(int id,
       {String? code, String? enumValue}) async {
-    final body = <String, dynamic>{
-      if (code != null) 'code': code,
-      if (enumValue != null) 'enumValue': enumValue,
-    };
-    final response = await http.patch(
-      Uri.parse('$_base/node/$id'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
+    return _mutateWithVars(
+      r'''
+        mutation UpdateNode($id: Int!, $input: UpdateNodeInput!) {
+          updateAppConfigNode(id: $id, input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'id': id,
+        'input': {
+          if (code != null) 'code': code,
+          if (enumValue != null) 'enumValue': enumValue,
+        },
+      },
     );
-    if (response.statusCode != 200) {
-      throw Exception('Failed to update node: HTTP ${response.statusCode}');
-    }
-    return AppConfigNode.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
   }
 
-  /// Updates a DataForm's code and/or entity enum.
-  /// If the DataFormEntityType child node does not yet exist it is created.
   Future<AppConfigNode?> updateDataForm({
     required int formId,
     required String formCode,
@@ -201,30 +295,22 @@ class AppConfigService {
     String? newCode,
     String? newEntityValue,
   }) async {
-    AppConfigNode? tree;
-
-    if (newCode != null) {
-      tree = await updateNode(formId, code: newCode);
-    }
-
-    if (newEntityValue != null) {
-      if (entityNodeId != null) {
-        tree = await updateNode(entityNodeId, enumValue: newEntityValue);
-      } else {
-        tree = await addNode(
-          parentObjectId: formId,
-          typeCode: 'DataFormEntityType',
-          code: '${newCode ?? formCode}_entity',
-          enumValue: newEntityValue,
-        );
-      }
-    }
-
-    return tree;
+    return _mutateWithVars(
+      r'''
+        mutation UpdateForm($input: UpdateDataFormInput!) {
+          updateDataForm(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'formId': formId,
+          if (newCode != null) 'code': newCode,
+          if (newEntityValue != null) 'entity': newEntityValue,
+        },
+      },
+    );
   }
 
-  /// Updates a DataFormElement's code and/or type enum.
-  /// If the DataFormElementType child node does not yet exist it is created.
   Future<AppConfigNode?> updateDataFormElement({
     required int elementId,
     required String elementCode,
@@ -232,48 +318,47 @@ class AppConfigService {
     String? newCode,
     String? newTypeValue,
   }) async {
-    AppConfigNode? tree;
-
-    if (newCode != null) {
-      tree = await updateNode(elementId, code: newCode);
-    }
-
-    if (newTypeValue != null) {
-      if (typeNodeId != null) {
-        tree = await updateNode(typeNodeId, enumValue: newTypeValue);
-      } else {
-        tree = await addNode(
-          parentObjectId: elementId,
-          typeCode: 'DataFormElementType',
-          code: '${newCode ?? elementCode}_type',
-          enumValue: newTypeValue,
-        );
-      }
-    }
-
-    return tree;
+    return _mutateWithVars(
+      r'''
+        mutation UpdateElement($input: UpdateDataFormElementFullInput!) {
+          updateDataFormElementFull(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'elementId': elementId,
+          if (newCode != null) 'code': newCode,
+          if (newTypeValue != null) 'type': newTypeValue,
+        },
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
   // Data Binding
   // ---------------------------------------------------------------------------
 
-  /// Fetches binding proposals for the given entity type and optional prefix.
   Future<BindingProposalResponse> fetchBindingProposals(
       String entityType, {String prefix = ''}) async {
-    final uri = Uri.parse('$_bindingBase/proposals/$entityType')
-        .replace(queryParameters: {'prefix': prefix});
-    final response = await http.get(uri);
-    if (response.statusCode != 200) {
-      throw Exception(
-          'Failed to fetch binding proposals: HTTP ${response.statusCode}');
+    final result = await _client.query(QueryOptions(
+      document: gql(r'''
+        query BindingProposals($entityType: String!, $prefix: String) {
+          bindingProposals(entityType: $entityType, prefix: $prefix) {
+            entityLabel
+            completions { segment javaType leaf suggestedElementType referencedEntityType }
+          }
+        }
+      '''),
+      variables: {'entityType': entityType, 'prefix': prefix},
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Failed to fetch binding proposals: ${result.exception}');
     }
     return BindingProposalResponse.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
+        result.data!['bindingProposals'] as Map<String, dynamic>);
   }
 
-  /// Updates a DataFormElement's code, type enum, dataBinding, and entity refs.
-  /// Creates child nodes if they do not yet exist.
   Future<AppConfigNode?> updateDataFormElementFull({
     required int elementId,
     required String elementCode,
@@ -287,62 +372,23 @@ class AppConfigService {
     String? newEntityProviderRef,
     String? newEntityRendererRef,
   }) async {
-    AppConfigNode? tree;
-
-    if (newCode != null) {
-      tree = await updateNode(elementId, code: newCode);
-    }
-
-    if (newTypeValue != null) {
-      if (typeNodeId != null) {
-        tree = await updateNode(typeNodeId, enumValue: newTypeValue);
-      } else {
-        tree = await addNode(
-          parentObjectId: elementId,
-          typeCode: 'DataFormElementType',
-          code: '${newCode ?? elementCode}_type',
-          enumValue: newTypeValue,
-        );
-      }
-    }
-
-    if (newDataBinding != null) {
-      if (dataBindingNodeId != null) {
-        tree = await updateNode(dataBindingNodeId, code: newDataBinding);
-      } else {
-        tree = await addNode(
-          parentObjectId: elementId,
-          typeCode: 'DataBinding',
-          code: newDataBinding,
-        );
-      }
-    }
-
-    if (newEntityProviderRef != null) {
-      if (entityProviderRefNodeId != null) {
-        tree = await updateNode(entityProviderRefNodeId, code: newEntityProviderRef);
-      } else {
-        tree = await addNode(
-          parentObjectId: elementId,
-          typeCode: 'EntityProviderRef',
-          code: newEntityProviderRef,
-        );
-      }
-    }
-
-    if (newEntityRendererRef != null) {
-      if (entityRendererRefNodeId != null) {
-        tree = await updateNode(entityRendererRefNodeId, code: newEntityRendererRef);
-      } else {
-        tree = await addNode(
-          parentObjectId: elementId,
-          typeCode: 'EntityRendererRef',
-          code: newEntityRendererRef,
-        );
-      }
-    }
-
-    return tree;
+    return _mutateWithVars(
+      r'''
+        mutation UpdateElementFull($input: UpdateDataFormElementFullInput!) {
+          updateDataFormElementFull(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'elementId': elementId,
+          if (newCode != null) 'code': newCode,
+          if (newTypeValue != null) 'type': newTypeValue,
+          if (newDataBinding != null) 'dataBinding': newDataBinding,
+          if (newEntityProviderRef != null) 'entityProviderRef': newEntityProviderRef,
+          if (newEntityRendererRef != null) 'entityRendererRef': newEntityRendererRef,
+        },
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -351,14 +397,21 @@ class AppConfigService {
 
   Future<List<EntityOption>> fetchEntityOptions(
       String providerCode, String rendererCode) async {
-    final uri = Uri.parse('$_entitySelectBase/options').replace(
-        queryParameters: {'provider': providerCode, 'renderer': rendererCode});
-    final response = await http.get(uri);
-    if (response.statusCode != 200) {
-      throw Exception(
-          'Failed to fetch entity options: HTTP ${response.statusCode}');
+    final result = await _client.query(QueryOptions(
+      document: gql(r'''
+        query EntityOptions($provider: String!, $renderer: String!) {
+          entitySelectOptions(provider: $provider, renderer: $renderer) {
+            id label
+          }
+        }
+      '''),
+      variables: {'provider': providerCode, 'renderer': rendererCode},
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Failed to fetch entity options: ${result.exception}');
     }
-    final list = jsonDecode(response.body) as List<dynamic>;
+    final list = result.data!['entitySelectOptions'] as List<dynamic>;
     return list
         .map((e) => EntityOption.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -368,37 +421,49 @@ class AppConfigService {
   // DataForm Evaluation
   // ---------------------------------------------------------------------------
 
-  /// Evaluates visibility and options for affected elements via the unified endpoint.
   Future<Map<String, ElementState>> fetchFormEvaluation({
     required String dataFormCode,
     int? entityId,
     String? changedElement,
     Map<String, String> formState = const {},
   }) async {
-    final uri = Uri.parse('$_dataFormBase/evaluate');
-    final body = jsonEncode({
-      'dataFormCode': dataFormCode,
-      'entityId': entityId,
-      'changedElement': changedElement,
-      'formState': formState,
-    });
-    final response = await http.post(uri,
-        headers: {'Content-Type': 'application/json'}, body: body);
-    if (response.statusCode != 200) {
-      throw Exception(
-          'Failed to evaluate form: HTTP ${response.statusCode}');
+    final formStateEntries = formState.entries
+        .map((e) => {'key': e.key, 'value': e.value})
+        .toList();
+
+    final result = await _client.query(QueryOptions(
+      document: gql(r'''
+        query Evaluate($input: EvaluateInput!) {
+          evaluateDataForm(input: $input) {
+            elements { key value { visible options { id label } } }
+          }
+        }
+      '''),
+      variables: {
+        'input': {
+          'dataFormCode': dataFormCode,
+          'entityId': entityId,
+          'changedElement': changedElement,
+          'formState': formStateEntries,
+        },
+      },
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Failed to evaluate form: ${result.exception}');
     }
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
-    final elements = json['elements'] as Map<String, dynamic>;
-    return elements.map((key, value) =>
-        MapEntry(key, ElementState.fromJson(value as Map<String, dynamic>)));
+    final elements = result.data!['evaluateDataForm']['elements'] as List<dynamic>;
+    return {
+      for (final entry in elements)
+        (entry as Map<String, dynamic>)['key'] as String:
+            ElementState.fromJson(entry['value'] as Map<String, dynamic>),
+    };
   }
 
   // ---------------------------------------------------------------------------
   // EntityProvider mutations
   // ---------------------------------------------------------------------------
 
-  /// Updates an EntityProvider's code and/or entityType.
   Future<AppConfigNode?> updateEntityProvider({
     required int providerId,
     required String providerCode,
@@ -406,33 +471,26 @@ class AppConfigService {
     String? newCode,
     String? newEntityTypeValue,
   }) async {
-    AppConfigNode? tree;
-
-    if (newCode != null) {
-      tree = await updateNode(providerId, code: newCode);
-    }
-
-    if (newEntityTypeValue != null) {
-      if (entityTypeNodeId != null) {
-        tree = await updateNode(entityTypeNodeId, enumValue: newEntityTypeValue);
-      } else {
-        tree = await addNode(
-          parentObjectId: providerId,
-          typeCode: 'EntityProviderEntityType',
-          code: '${newCode ?? providerCode}_entityType',
-          enumValue: newEntityTypeValue,
-        );
-      }
-    }
-
-    return tree;
+    return _mutateWithVars(
+      r'''
+        mutation UpdateProvider($input: UpdateEntityProviderInput!) {
+          updateEntityProvider(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'providerId': providerId,
+          if (newCode != null) 'code': newCode,
+          if (newEntityTypeValue != null) 'entityType': newEntityTypeValue,
+        },
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
   // EntityRenderer mutations
   // ---------------------------------------------------------------------------
 
-  /// Updates an EntityRenderer's code, entityType, and/or template.
   Future<AppConfigNode?> updateEntityRenderer({
     required int rendererId,
     required String rendererCode,
@@ -442,45 +500,26 @@ class AppConfigService {
     String? newEntityTypeValue,
     String? newTemplate,
   }) async {
-    AppConfigNode? tree;
-
-    if (newCode != null) {
-      tree = await updateNode(rendererId, code: newCode);
-    }
-
-    if (newEntityTypeValue != null) {
-      if (entityTypeNodeId != null) {
-        tree = await updateNode(entityTypeNodeId, enumValue: newEntityTypeValue);
-      } else {
-        tree = await addNode(
-          parentObjectId: rendererId,
-          typeCode: 'EntityRendererEntityType',
-          code: '${newCode ?? rendererCode}_entityType',
-          enumValue: newEntityTypeValue,
-        );
-      }
-    }
-
-    if (newTemplate != null) {
-      if (templateNodeId != null) {
-        tree = await updateNode(templateNodeId, code: newTemplate);
-      } else {
-        tree = await addNode(
-          parentObjectId: rendererId,
-          typeCode: 'EntityRendererTemplate',
-          code: newTemplate,
-        );
-      }
-    }
-
-    return tree;
+    return _mutateWithVars(
+      r'''
+        mutation UpdateRenderer($input: UpdateEntityRendererInput!) {
+          updateEntityRenderer(input: $input) { ...AppConfigFields }
+        }
+      ''',
+      {
+        'input': {
+          'rendererId': rendererId,
+          if (newCode != null) 'code': newCode,
+          if (newEntityTypeValue != null) 'entityType': newEntityTypeValue,
+          if (newTemplate != null) 'template': newTemplate,
+        },
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
   // Expression Compile Check
   // ---------------------------------------------------------------------------
-
-  static const _expressionBase = 'http://localhost:8080/api/expressions';
 
   Future<CompileCheckResult> compileCheck({
     required String type,
@@ -488,21 +527,35 @@ class AppConfigService {
     required String expression,
     String? expectedEntityType,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_expressionBase/compile-check'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'type': type,
-        'baseClass': baseClass,
-        'expression': expression,
-        if (expectedEntityType != null) 'expectedEntityType': expectedEntityType,
-      }),
-    );
-    if (response.statusCode != 200) {
-      throw Exception('Compile check failed: HTTP ${response.statusCode}');
+    final result = await _client.query(QueryOptions(
+      document: gql(r'''
+        query CompileCheck($input: CompileCheckInput!) {
+          compileCheckExpression(input: $input) {
+            valid
+            errors { line message }
+            warnings { message }
+            typeContext {
+              variables { key value }
+              methods { key value { name returnType returnsResolvable } }
+            }
+          }
+        }
+      '''),
+      variables: {
+        'input': {
+          'type': type,
+          'baseClass': baseClass,
+          'expression': expression,
+          if (expectedEntityType != null) 'expectedEntityType': expectedEntityType,
+        },
+      },
+      fetchPolicy: FetchPolicy.noCache,
+    ));
+    if (result.hasException) {
+      throw Exception('Compile check failed: ${result.exception}');
     }
     return CompileCheckResult.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
+        result.data!['compileCheckExpression'] as Map<String, dynamic>);
   }
 }
 
@@ -555,13 +608,20 @@ class TypeContext {
   const TypeContext({required this.variables, required this.methods});
 
   factory TypeContext.fromJson(Map<String, dynamic> json) {
-    final vars = (json['variables'] as Map<String, dynamic>?)
-        ?.map((k, v) => MapEntry(k, v as String)) ?? {};
+    final vars = <String, String>{};
+    final rawVars = json['variables'] as List<dynamic>?;
+    if (rawVars != null) {
+      for (final entry in rawVars) {
+        final e = entry as Map<String, dynamic>;
+        vars[e['key'] as String] = e['value'] as String;
+      }
+    }
     final meths = <String, List<MethodInfo>>{};
-    final rawMethods = json['methods'] as Map<String, dynamic>?;
+    final rawMethods = json['methods'] as List<dynamic>?;
     if (rawMethods != null) {
-      for (final entry in rawMethods.entries) {
-        meths[entry.key] = (entry.value as List<dynamic>)
+      for (final entry in rawMethods) {
+        final e = entry as Map<String, dynamic>;
+        meths[e['key'] as String] = (e['value'] as List<dynamic>)
             .map((m) => MethodInfo.fromJson(m as Map<String, dynamic>))
             .toList();
       }

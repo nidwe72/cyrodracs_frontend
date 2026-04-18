@@ -137,20 +137,20 @@ class AppConfigNode {
 
     // --- DataForms ---
     final dataFormsRaw =
-        (json['dataForms'] as Map<String, dynamic>?) ?? {};
+        (json['dataForms'] as List<dynamic>?) ?? [];
     final dataFormNodes = <AppConfigNode>[];
 
-    for (final formEntry in dataFormsRaw.entries) {
-      final form = formEntry.value as Map<String, dynamic>;
+    for (final formItem in dataFormsRaw) {
+      final form = formItem as Map<String, dynamic>;
       final formId = (form['id'] as num).toInt();
       final formCode = form['code'] as String;
 
       final elementsRaw =
-          (form['elements'] as Map<String, dynamic>?) ?? {};
+          (form['elements'] as List<dynamic>?) ?? [];
       final elementNodes = <AppConfigNode>[];
 
-      for (final elemEntry in elementsRaw.entries) {
-        final elem = elemEntry.value as Map<String, dynamic>;
+      for (final elemItem in elementsRaw) {
+        final elem = elemItem as Map<String, dynamic>;
         final elemId = (elem['id'] as num?)?.toInt();
         final elemType = elem['type'] as String?;
 
@@ -288,11 +288,11 @@ class AppConfigNode {
 
     // --- EntityProviders ---
     final providersRaw =
-        (json['entityProviders'] as Map<String, dynamic>?) ?? {};
+        (json['entityProviders'] as List<dynamic>?) ?? [];
     final providerNodes = <AppConfigNode>[];
 
-    for (final provEntry in providersRaw.entries) {
-      final prov = provEntry.value as Map<String, dynamic>;
+    for (final provItem in providersRaw) {
+      final prov = provItem as Map<String, dynamic>;
       final provId = (prov['id'] as num?)?.toInt();
       final provChildren = <AppConfigNode>[];
 
@@ -350,11 +350,11 @@ class AppConfigNode {
 
     // --- EntityRenderers ---
     final renderersRaw =
-        (json['entityRenderers'] as Map<String, dynamic>?) ?? {};
+        (json['entityRenderers'] as List<dynamic>?) ?? [];
     final rendererNodes = <AppConfigNode>[];
 
-    for (final renEntry in renderersRaw.entries) {
-      final ren = renEntry.value as Map<String, dynamic>;
+    for (final renItem in renderersRaw) {
+      final ren = renItem as Map<String, dynamic>;
       rendererNodes.add(AppConfigNode(
         label: ren['code'] as String,
         kind: AppConfigNodeKind.instance,
@@ -370,20 +370,20 @@ class AppConfigNode {
 
     // --- ViewTree ---
     final viewTreeRaw =
-        (json['viewTree'] as Map<String, dynamic>?) ?? {};
+        (json['viewTree'] as List<dynamic>?) ?? [];
     final viewNodeNodes = <AppConfigNode>[];
 
-    for (final vnEntry in viewTreeRaw.entries) {
-      viewNodeNodes.add(_parseViewNode(vnEntry.value as Map<String, dynamic>));
+    for (final vnItem in viewTreeRaw) {
+      viewNodeNodes.add(_parseViewNode(vnItem as Map<String, dynamic>));
     }
 
     // --- Expressions ---
     final expressionsRaw =
-        (json['expressions'] as Map<String, dynamic>?) ?? {};
+        (json['expressions'] as List<dynamic>?) ?? [];
     final expressionNodes = <AppConfigNode>[];
 
-    for (final exprEntry in expressionsRaw.entries) {
-      final expr = exprEntry.value as Map<String, dynamic>;
+    for (final exprItem in expressionsRaw) {
+      final expr = exprItem as Map<String, dynamic>;
       expressionNodes.add(AppConfigNode(
         label: expr['code'] as String,
         kind: AppConfigNodeKind.instance,

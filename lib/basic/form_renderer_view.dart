@@ -1,9 +1,9 @@
-import 'dart:convert';
 import 'package:date_picker_plus/date_picker_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
-import 'package:http/http.dart' as http;
+import 'package:graphql/client.dart';
 import '../app_config_editor/app_config_service.dart';
+import '../graphql_client.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
 import '../models/editor_stack.dart';
@@ -214,28 +214,28 @@ class _FormRendererViewState extends State<FormRendererView> {
       if (allPending.isNotEmpty) 'pendingChildren': allPending,
     };
     try {
-      final response = await http.post(
-        Uri.parse('http://localhost:8080/api/data-form-data'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(body),
-      );
-      if (response.statusCode == 200) {
-        final result = jsonDecode(response.body) as Map<String, dynamic>;
+      final result = await graphqlClient.mutate(MutationOptions(
+        document: gql(r'''
+          mutation SaveFormData($input: DataFormDataInput!) {
+            saveDataFormData(input: $input) {
+              success error data { entityId }
+            }
+          }
+        '''),
+        variables: {'input': body},
+        fetchPolicy: FetchPolicy.noCache,
+      ));
+      if (result.hasException) throw result.exception!;
+      final saveResult = result.data!['saveDataFormData'] as Map<String, dynamic>;
+      if (saveResult['success'] == true) {
+        final entityId = (saveResult['data'] as Map<String, dynamic>?)?['entityId'];
         setState(() {
-          _submitResult = 'Saved entity (id=${result['entityId']})\n'
+          _submitResult = 'Saved entity (id=$entityId)\n'
               '${filteredValues.entries.map((e) => '${e.key}: ${e.value ?? '-'}').join('\n')}';
         });
         widget.onSaved?.call();
       } else {
-        // Parse error message from structured response
-        String errorMsg;
-        try {
-          final errorBody = jsonDecode(response.body) as Map<String, dynamic>;
-          errorMsg = errorBody['error'] as String? ?? 'Unknown error';
-        } catch (_) {
-          errorMsg = response.body;
-        }
-        setState(() => _submitResult = 'Error: $errorMsg');
+        setState(() => _submitResult = 'Error: ${saveResult['error'] ?? 'Unknown error'}');
       }
     } catch (e) {
       setState(() => _submitResult = 'Error: $e');
@@ -1522,38 +1522,40 @@ class _GridFieldState extends State<_GridField> {
       }
     }
 
-    final body = <String, dynamic>{
-      'entityId': widget.entityId,
-      'formState': formStateStrings,
-    };
-
     try {
-      final uri = Uri.parse(
-        'http://localhost:8080/api/view/grid-data/'
-        '${widget.dataFormCode}/${widget.elementCode}'
-        '?page=$_page&size=$_pageSize',
-      );
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(body),
-      );
+      final formStateEntries = formStateStrings.entries
+          .map((e) => {'key': e.key, 'value': e.value})
+          .toList();
+      final result = await graphqlClient.query(QueryOptions(
+        document: gql(r'''
+          query GridData($input: GridDataInput!) {
+            gridData(input: $input) {
+              items totalCount page pageSize totalPages
+            }
+          }
+        '''),
+        variables: {
+          'input': {
+            'dataFormCode': widget.dataFormCode,
+            'elementCode': widget.elementCode,
+            'entityId': widget.entityId,
+            'formState': formStateEntries,
+            'page': _page,
+            'size': _pageSize,
+          },
+        },
+        fetchPolicy: FetchPolicy.noCache,
+      ));
       if (!mounted) return;
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        setState(() {
-          _rows = (data['items'] as List<dynamic>).cast<Map<String, dynamic>>();
-          _totalCount = (data['totalCount'] as num).toInt();
-          _page = (data['page'] as num).toInt();
-          _totalPages = (data['totalPages'] as num).toInt();
-          _loading = false;
-        });
-      } else {
-        setState(() {
-          _error = 'HTTP ${response.statusCode}';
-          _loading = false;
-        });
-      }
+      if (result.hasException) throw result.exception!;
+      final data = result.data!['gridData'] as Map<String, dynamic>;
+      setState(() {
+        _rows = (data['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+        _totalCount = (data['totalCount'] as num).toInt();
+        _page = (data['page'] as num).toInt();
+        _totalPages = (data['totalPages'] as num).toInt();
+        _loading = false;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {

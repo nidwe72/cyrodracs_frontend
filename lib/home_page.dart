@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'admin/admin_tab.dart';
 import 'app/app_view.dart';
 import 'basic/basic_tab.dart';
+// Note: _onHelloPressed still uses REST (/api/hello) — demo endpoint, not migrated to GraphQL
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
