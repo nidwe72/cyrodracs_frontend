@@ -6,8 +6,12 @@ import '../app_config_editor/app_config_service.dart';
 import '../graphql_client.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
+import '../models/column_filter_meta.dart';
 import '../models/editor_stack.dart';
 import '../theme/app_theme.dart';
+import '../widgets/filters/column_filter_input.dart';
+import '../widgets/filters/debouncer.dart';
+import '../widgets/sortable_column_header.dart';
 
 /// Callback for GRID add/edit actions: pushes a child editor.
 typedef GridActionCallback = void Function({
@@ -1413,6 +1417,27 @@ class _GridFieldState extends State<_GridField> {
   int _totalCount = 0;
   int _totalPages = 0;
 
+  // Per-column sort state (single column, replaces provider sortFields).
+  String? _sortColumnKey;
+  SortDirection? _sortDirection;
+
+  // Column-filter state. Metadata fetched once on mount; controllers persist
+  // across rebuilds so TextField focus is preserved during typing.
+  Map<String, ColumnFilterMeta> _columnMeta = const {};
+  final Map<String, dynamic> _columnFilters = {};
+  final Map<String, TextEditingController> _filterControllers = {};
+  final Debouncer _filterDebouncer = Debouncer();
+  int _fetchSeq = 0;
+
+  @override
+  void dispose() {
+    for (final c in _filterControllers.values) {
+      c.dispose();
+    }
+    _filterDebouncer.dispose();
+    super.dispose();
+  }
+
   List<Widget> _buildPendingTable() {
     return [
       SizedBox(
@@ -1503,9 +1528,210 @@ class _GridFieldState extends State<_GridField> {
   @override
   void initState() {
     super.initState();
+    _fetchColumnMeta();
     if (widget.entityId != null) {
       _fetchData();
     }
+  }
+
+  Future<void> _fetchColumnMeta() async {
+    try {
+      final result = await graphqlClient.query(QueryOptions(
+        document: gql(r'''
+          query ColumnFilterMetadata($scope: ColumnFilterScopeInput!) {
+            columnFilterMetadata(scope: $scope) {
+              columnKey filterType entityProviderRef entityRendererRef enumValues
+            }
+          }
+        '''),
+        variables: {
+          'scope': {
+            'dataFormCode': widget.dataFormCode,
+            'elementCode': widget.elementCode,
+          },
+        },
+        fetchPolicy: FetchPolicy.noCache,
+      ));
+      if (result.hasException) throw result.exception!;
+      final list = (result.data!['columnFilterMetadata'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      debugPrint('[columnFilterMetadata GRID] dataFormCode=${widget.dataFormCode} '
+          'elementCode=${widget.elementCode} → ${list.length} entries: '
+          '${list.map((m) => "${m['columnKey']}=${m['filterType']}").join(', ')}');
+      debugPrint('[columnFilterMetadata GRID] frontend column keys: '
+          '${widget.tableColumns.map((c) => c.key).join(", ")}');
+      final next = <String, ColumnFilterMeta>{};
+      for (final m in list) {
+        final meta = ColumnFilterMeta.fromJson(m);
+        next[meta.columnKey] = meta;
+      }
+      if (!mounted) return;
+      setState(() => _columnMeta = next);
+    } catch (e, st) {
+      debugPrint('[columnFilterMetadata GRID] FAILED for '
+          '${widget.dataFormCode}/${widget.elementCode}: $e\n$st');
+      if (!mounted) return;
+      setState(() => _columnMeta = const {});
+    }
+  }
+
+  Map<String, dynamic>? _composeUserFilter() {
+    final children = <Map<String, dynamic>>[];
+    for (final entry in _columnFilters.entries) {
+      final meta = _columnMeta[entry.key];
+      if (meta == null) continue;
+      final value = entry.value;
+      switch (meta.filterType) {
+        case ColumnFilterType.string:
+          if (value is String && value.isNotEmpty) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': entry.key,
+              'operator': 'LIKE',
+              'value': '%$value%',
+            });
+          }
+          break;
+        case ColumnFilterType.number:
+        case ColumnFilterType.date:
+        case ColumnFilterType.yearMonth:
+        case ColumnFilterType.datetime:
+          if (value is Map) {
+            final from = value['from'];
+            final to = value['to'];
+            if (from is String && from.isNotEmpty) {
+              children.add({
+                'type': 'COMPARISON',
+                'field': entry.key,
+                'operator': 'GREATER_THAN_OR_EQUAL',
+                'value': from,
+              });
+            }
+            if (to is String && to.isNotEmpty) {
+              children.add({
+                'type': 'COMPARISON',
+                'field': entry.key,
+                'operator': 'LESS_THAN_OR_EQUAL',
+                'value': to,
+              });
+            }
+          }
+          break;
+        case ColumnFilterType.boolean:
+          if (value is bool) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': entry.key,
+              'operator': 'EQUALS',
+              'value': value ? 'true' : 'false',
+            });
+          }
+          break;
+        case ColumnFilterType.entityEnum:
+          if (value is String && value.isNotEmpty) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': entry.key,
+              'operator': 'EQUALS',
+              'value': value,
+            });
+          }
+          break;
+        case ColumnFilterType.entityRef:
+          if (value is Map && value['id'] != null) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': '${entry.key}.id',
+              'operator': 'EQUALS',
+              'value': value['id'].toString(),
+            });
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    if (children.isEmpty) return null;
+    return {'type': 'AND_GROUP', 'children': children};
+  }
+
+  bool get _hasActiveFilters => _columnFilters.values.any((v) {
+        if (v is String) return v.isNotEmpty;
+        return v != null;
+      });
+
+  void _onColumnFilterChanged(String columnKey, dynamic value) {
+    setState(() {
+      if (value == null || (value is String && value.isEmpty)) {
+        _columnFilters.remove(columnKey);
+      } else {
+        _columnFilters[columnKey] = value;
+      }
+      _page = 0;
+    });
+    _fetchData();
+  }
+
+  void _clearColumnFilters() {
+    if (_columnFilters.isEmpty) return;
+    for (final controller in _filterControllers.values) {
+      controller.clear();
+    }
+    setState(() {
+      _columnFilters.clear();
+      _page = 0;
+    });
+    _fetchData();
+  }
+
+  TextEditingController _ensureController(String columnKey, [String subkey = '']) {
+    return _filterControllers.putIfAbsent(
+        '$columnKey:$subkey', () => TextEditingController());
+  }
+
+  Widget? _buildFilterInputFor(GridTableColumn col) {
+    final meta = _columnMeta[col.key];
+    if (meta == null) return null;
+    return buildColumnFilterInput(
+      meta: meta,
+      currentValue: _columnFilters[col.key],
+      acquireController: (subkey) => _ensureController(col.key, subkey),
+      debouncer: _filterDebouncer,
+      onChanged: _onColumnFilterChanged,
+      dataFormCode: widget.dataFormCode,
+      elementCode: widget.elementCode,
+    );
+  }
+
+  bool get _anyColumnFilterable {
+    for (final c in widget.tableColumns) {
+      if (_buildFilterInputFor(c) != null) return true;
+    }
+    return false;
+  }
+
+  DataColumn _buildHeaderColumn(GridTableColumn col, {double leftOffset = 0}) {
+    return sortableDataColumn(
+      columnKey: col.key,
+      header: col.header,
+      activeSortKey: _sortColumnKey,
+      activeSortDirection: _sortDirection,
+      onSortToggle: _onSortToggle,
+      leftOffset: leftOffset,
+      filterInput: _buildFilterInputFor(col),
+      reserveFilterRow: _anyColumnFilterable,
+    );
+  }
+
+  void _onSortToggle(String columnKey) {
+    final isActive = _sortColumnKey == columnKey;
+    final next = cycleSortDirection(_sortDirection, isActive: isActive);
+    setState(() {
+      _sortColumnKey = next == null ? null : columnKey;
+      _sortDirection = next;
+      _page = 0;
+    });
+    _fetchData();
   }
 
   Future<void> _fetchData() async {
@@ -1513,6 +1739,7 @@ class _GridFieldState extends State<_GridField> {
       _loading = true;
       _error = null;
     });
+    final mySeq = ++_fetchSeq;
 
     // Build formState as Map<String, String> for the backend
     final formStateStrings = <String, String>{};
@@ -1526,6 +1753,11 @@ class _GridFieldState extends State<_GridField> {
       final formStateEntries = formStateStrings.entries
           .map((e) => {'key': e.key, 'value': e.value})
           .toList();
+      final List<Map<String, String>>? userSort =
+          (_sortColumnKey != null && _sortDirection != null)
+              ? [{'field': _sortColumnKey!, 'direction': _sortDirection!.wireValue}]
+              : null;
+      final userFilter = _composeUserFilter();
       final result = await graphqlClient.query(QueryOptions(
         document: gql(r'''
           query GridData($input: GridDataInput!) {
@@ -1542,11 +1774,13 @@ class _GridFieldState extends State<_GridField> {
             'formState': formStateEntries,
             'page': _page,
             'size': _pageSize,
+            if (userSort != null) 'userSort': userSort,
+            if (userFilter != null) 'userFilter': userFilter,
           },
         },
         fetchPolicy: FetchPolicy.noCache,
       ));
-      if (!mounted) return;
+      if (mySeq != _fetchSeq || !mounted) return;
       if (result.hasException) throw result.exception!;
       final data = result.data!['gridData'] as Map<String, dynamic>;
       setState(() {
@@ -1557,7 +1791,7 @@ class _GridFieldState extends State<_GridField> {
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (mySeq != _fetchSeq || !mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -1610,6 +1844,16 @@ class _GridFieldState extends State<_GridField> {
                     const SizedBox(width: AppTheme.spacingSm),
                   if (widget.entityId != null)
                     IconButton(
+                      icon: const Icon(Icons.filter_alt_off, size: AppTheme.iconSize),
+                      tooltip: 'Clear filters',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _hasActiveFilters ? _clearColumnFilters : null,
+                    ),
+                  if (widget.entityId != null)
+                    const SizedBox(width: AppTheme.spacingSm),
+                  if (widget.entityId != null)
+                    IconButton(
                       icon: const Icon(Icons.refresh, size: AppTheme.iconSize),
                       tooltip: 'Reload',
                       padding: EdgeInsets.zero,
@@ -1657,11 +1901,12 @@ class _GridFieldState extends State<_GridField> {
             SizedBox(
               width: double.infinity,
               child: DataTable(
+                headingRowHeight: _anyColumnFilterable ? 88 : 56,
                 columns: [
                   if (widget.tableColumns.isNotEmpty)
-                    AppTheme.headerWithActionsOffset(widget.tableColumns.first.header),
-                  ...widget.tableColumns.skip(1)
-                      .map((c) => DataColumn(label: Text(c.header))),
+                    _buildHeaderColumn(widget.tableColumns.first,
+                        leftOffset: AppTheme.actionsOffset(1)),
+                  ...widget.tableColumns.skip(1).map(_buildHeaderColumn),
                 ],
                 rows: _rows.asMap().entries.map((entry) {
                   final index = entry.key;

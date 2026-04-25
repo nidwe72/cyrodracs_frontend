@@ -6,8 +6,12 @@ import '../basic/form_renderer_view.dart';
 import '../models/app_config_node.dart';
 import '../models/data_form.dart';
 import '../models/data_form_element.dart';
+import '../models/column_filter_meta.dart';
 import '../models/editor_stack.dart';
 import '../theme/app_theme.dart';
+import '../widgets/filters/column_filter_input.dart';
+import '../widgets/filters/debouncer.dart';
+import '../widgets/sortable_column_header.dart';
 
 /// Converts a SCREAMING_SNAKE_CASE backend type value to the camelCase name
 /// expected by [DataFormElementType.byName].
@@ -196,6 +200,27 @@ class _AppViewState extends State<AppView> {
   int _totalCount = 0;
   int _totalPages = 0;
 
+  // Per-column sort state (single column, replaces provider sortFields).
+  String? _sortColumnKey;
+  SortDirection? _sortDirection;
+
+  // Column-filter state. Refetched per ViewNode; controllers persist across
+  // rebuilds so TextField focus is preserved during typing.
+  Map<String, ColumnFilterMeta> _columnMeta = const {};
+  final Map<String, dynamic> _columnFilters = {};
+  final Map<String, TextEditingController> _filterControllers = {};
+  final Debouncer _filterDebouncer = Debouncer();
+  int _fetchSeq = 0;
+
+  @override
+  void dispose() {
+    for (final c in _filterControllers.values) {
+      c.dispose();
+    }
+    _filterDebouncer.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -218,6 +243,125 @@ class _AppViewState extends State<AppView> {
     }
   }
 
+  Future<void> _fetchColumnMeta(_ViewDef def) async {
+    try {
+      final result = await graphqlClient.query(QueryOptions(
+        document: gql(r'''
+          query ColumnFilterMetadata($scope: ColumnFilterScopeInput!) {
+            columnFilterMetadata(scope: $scope) {
+              columnKey filterType entityProviderRef entityRendererRef enumValues
+            }
+          }
+        '''),
+        variables: {'scope': {'viewNodeCode': def.code}},
+        fetchPolicy: FetchPolicy.noCache,
+      ));
+      if (result.hasException) throw result.exception!;
+      final list = (result.data!['columnFilterMetadata'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      debugPrint('[columnFilterMetadata] viewNodeCode=${def.code} → ${list.length} entries: '
+          '${list.map((m) => "${m['columnKey']}=${m['filterType']}").join(', ')}');
+      final next = <String, ColumnFilterMeta>{};
+      for (final m in list) {
+        final meta = ColumnFilterMeta.fromJson(m);
+        next[meta.columnKey] = meta;
+      }
+      if (!mounted) return;
+      setState(() => _columnMeta = next);
+    } catch (e, st) {
+      debugPrint('[columnFilterMetadata] FAILED for ${def.code}: $e\n$st');
+      if (!mounted) return;
+      setState(() => _columnMeta = const {});
+    }
+  }
+
+  /// Builds a single AND_GROUP FilterNodeInput from current `_columnFilters`.
+  /// Returns null when no filters are active.
+  Map<String, dynamic>? _composeUserFilter() {
+    final children = <Map<String, dynamic>>[];
+    for (final entry in _columnFilters.entries) {
+      final meta = _columnMeta[entry.key];
+      if (meta == null) continue;
+      final value = entry.value;
+      switch (meta.filterType) {
+        case ColumnFilterType.string:
+          if (value is String && value.isNotEmpty) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': entry.key,
+              'operator': 'LIKE',
+              'value': '%$value%',
+            });
+          }
+          break;
+        case ColumnFilterType.number:
+        case ColumnFilterType.date:
+        case ColumnFilterType.yearMonth:
+        case ColumnFilterType.datetime:
+          if (value is Map) {
+            final from = value['from'];
+            final to = value['to'];
+            if (from is String && from.isNotEmpty) {
+              children.add({
+                'type': 'COMPARISON',
+                'field': entry.key,
+                'operator': 'GREATER_THAN_OR_EQUAL',
+                'value': from,
+              });
+            }
+            if (to is String && to.isNotEmpty) {
+              children.add({
+                'type': 'COMPARISON',
+                'field': entry.key,
+                'operator': 'LESS_THAN_OR_EQUAL',
+                'value': to,
+              });
+            }
+          }
+          break;
+        case ColumnFilterType.boolean:
+          if (value is bool) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': entry.key,
+              'operator': 'EQUALS',
+              'value': value ? 'true' : 'false',
+            });
+          }
+          break;
+        case ColumnFilterType.entityEnum:
+          if (value is String && value.isNotEmpty) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': entry.key,
+              'operator': 'EQUALS',
+              'value': value,
+            });
+          }
+          break;
+        case ColumnFilterType.entityRef:
+          if (value is Map && value['id'] != null) {
+            children.add({
+              'type': 'COMPARISON',
+              'field': '${entry.key}.id',
+              'operator': 'EQUALS',
+              'value': value['id'].toString(),
+            });
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    if (children.isEmpty) return null;
+    return {'type': 'AND_GROUP', 'children': children};
+  }
+
+  bool get _hasActiveFilters => _columnFilters.values.any((v) {
+        if (v is String) return v.isNotEmpty;
+        return v != null;
+      });
+
   Future<void> _fetchEntities(_ViewDef def, {int page = 0}) async {
     setState(() {
       _selectedDef = def;
@@ -225,18 +369,34 @@ class _AppViewState extends State<AppView> {
       _error = null;
       _editorStack.clear();
     });
+    final mySeq = ++_fetchSeq;
     try {
+      final List<Map<String, String>>? userSort =
+          (_sortColumnKey != null && _sortDirection != null)
+              ? [{'field': _sortColumnKey!, 'direction': _sortDirection!.wireValue}]
+              : null;
+      final userFilter = _composeUserFilter();
       final result = await graphqlClient.query(QueryOptions(
         document: gql(r'''
-          query ViewData($viewNodeCode: String!, $page: Int, $size: Int) {
-            viewData(viewNodeCode: $viewNodeCode, page: $page, size: $size) {
+          query ViewData($viewNodeCode: String!, $page: Int, $size: Int,
+                         $userFilter: FilterNodeInput,
+                         $userSort: [SortFieldInput!]) {
+            viewData(viewNodeCode: $viewNodeCode, page: $page, size: $size,
+                     userFilter: $userFilter, userSort: $userSort) {
               items totalCount page pageSize totalPages
             }
           }
         '''),
-        variables: {'viewNodeCode': def.code, 'page': page, 'size': _pageSize},
+        variables: {
+          'viewNodeCode': def.code,
+          'page': page,
+          'size': _pageSize,
+          'userFilter': userFilter,
+          'userSort': userSort,
+        },
         fetchPolicy: FetchPolicy.noCache,
       ));
+      if (mySeq != _fetchSeq || !mounted) return; // last-wins discard
       if (result.hasException) throw result.exception!;
       final body = result.data!['viewData'] as Map<String, dynamic>;
       final items = (body['items'] as List<dynamic>).cast<Map<String, dynamic>>();
@@ -248,11 +408,81 @@ class _AppViewState extends State<AppView> {
         _loading = false;
       });
     } catch (e) {
+      if (mySeq != _fetchSeq || !mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
     }
+  }
+
+  void _onColumnFilterChanged(String columnKey, dynamic value) {
+    setState(() {
+      if (value == null || (value is String && value.isEmpty)) {
+        _columnFilters.remove(columnKey);
+      } else {
+        _columnFilters[columnKey] = value;
+      }
+    });
+    _fetchEntities(_selectedDef!, page: 0);
+  }
+
+  void _clearColumnFilters() {
+    if (_columnFilters.isEmpty) return;
+    for (final controller in _filterControllers.values) {
+      controller.clear();
+    }
+    setState(() => _columnFilters.clear());
+    _fetchEntities(_selectedDef!, page: 0);
+  }
+
+  TextEditingController _ensureController(String columnKey, [String subkey = '']) {
+    return _filterControllers.putIfAbsent(
+        '$columnKey:$subkey', () => TextEditingController());
+  }
+
+  Widget? _buildFilterInputFor(_ColDef col) {
+    final meta = _columnMeta[col.key];
+    if (meta == null) return null;
+    return buildColumnFilterInput(
+      meta: meta,
+      currentValue: _columnFilters[col.key],
+      acquireController: (subkey) => _ensureController(col.key, subkey),
+      debouncer: _filterDebouncer,
+      onChanged: _onColumnFilterChanged,
+      viewNodeCode: _selectedDef?.code,
+    );
+  }
+
+  bool get _anyColumnFilterable {
+    final def = _selectedDef;
+    if (def == null) return false;
+    for (final c in def.columns) {
+      if (_buildFilterInputFor(c) != null) return true;
+    }
+    return false;
+  }
+
+  DataColumn _buildColumn(_ColDef col, {double leftOffset = 0}) {
+    return sortableDataColumn(
+      columnKey: col.key,
+      header: col.header,
+      activeSortKey: _sortColumnKey,
+      activeSortDirection: _sortDirection,
+      onSortToggle: _onSortToggle,
+      leftOffset: leftOffset,
+      filterInput: _buildFilterInputFor(col),
+      reserveFilterRow: _anyColumnFilterable,
+    );
+  }
+
+  void _resetFilterStateForViewChange() {
+    _columnFilters.clear();
+    for (final c in _filterControllers.values) {
+      c.dispose();
+    }
+    _filterControllers.clear();
+    _columnMeta = const {};
   }
 
   Future<void> _deleteEntity(int id) async {
@@ -412,6 +642,11 @@ class _AppViewState extends State<AppView> {
 
   void _onNodeActivated(_ViewDef def) {
     if (def.type == 'ENTITY_LIST') {
+      // Switching nodes resets per-table sort + filter state (CF1.3).
+      _sortColumnKey = null;
+      _sortDirection = null;
+      _resetFilterStateForViewChange();
+      _fetchColumnMeta(def);
       _fetchEntities(def);
     } else if (def.type == 'STATIC_PAGE') {
       setState(() {
@@ -446,6 +681,16 @@ class _AppViewState extends State<AppView> {
       dataFormCode: def.dataFormRef!,
       label: 'New ${def.label}',
     );
+  }
+
+  void _onSortToggle(String columnKey) {
+    final isActive = _sortColumnKey == columnKey;
+    final next = cycleSortDirection(_sortDirection, isActive: isActive);
+    setState(() {
+      _sortColumnKey = next == null ? null : columnKey;
+      _sortDirection = next;
+    });
+    _fetchEntities(_selectedDef!, page: 0);
   }
 
   @override
@@ -705,6 +950,14 @@ class _AppViewState extends State<AppView> {
                     ),
                   const SizedBox(width: AppTheme.spacingSm),
                   IconButton(
+                    icon: const Icon(Icons.filter_alt_off, size: AppTheme.iconSize),
+                    tooltip: 'Clear filters',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: _hasActiveFilters ? _clearColumnFilters : null,
+                  ),
+                  const SizedBox(width: AppTheme.spacingSm),
+                  IconButton(
                     icon: const Icon(Icons.refresh, size: AppTheme.iconSize),
                     tooltip: 'Reload',
                     padding: EdgeInsets.zero,
@@ -730,10 +983,11 @@ class _AppViewState extends State<AppView> {
                   child: SizedBox(
                     width: double.infinity,
                     child: DataTable(
+                      headingRowHeight: _anyColumnFilterable ? 88 : 56,
                       columns: [
                         if (def.columns.isNotEmpty)
-                          AppTheme.headerWithActionsOffset(def.columns.first.header),
-                        ...def.columns.skip(1).map((c) => DataColumn(label: Text(c.header))),
+                          _buildColumn(def.columns.first, leftOffset: AppTheme.actionsOffset(1)),
+                        ...def.columns.skip(1).map((c) => _buildColumn(c)),
                       ],
                       rows: _entities.asMap().entries.map((entry) {
                         final index = entry.key;

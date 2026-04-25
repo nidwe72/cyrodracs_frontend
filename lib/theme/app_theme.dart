@@ -60,6 +60,12 @@ abstract final class AppTheme {
   // Width of the action icons area (icon size + padding per icon + gap)
   static const double _actionIconWidth = iconSize + 8; // 4px padding each side
 
+  /// Left offset that aligns a header label with [cellWithActions] content
+  /// containing [actionCount] leading action icons.
+  static double actionsOffset(int actionCount) {
+    return actionCount * _actionIconWidth + (actionCount > 0 ? 8 : 0);
+  }
+
   /// Builds a DataCell that prepends action icons before the cell text.
   /// Used as the first data column cell in every DataRow (for edit icon).
   static DataCell cellWithActions(String text, List<Widget> actions) {
@@ -87,10 +93,9 @@ abstract final class AppTheme {
   /// Builds a DataColumn header with left padding to align with cellWithActions content.
   /// [actionCount] is the number of action icons at the start (typically 1 for edit).
   static DataColumn headerWithActionsOffset(String label, {int actionCount = 1}) {
-    final offset = actionCount * _actionIconWidth + (actionCount > 0 ? 8 : 0);
     return DataColumn(
       label: Padding(
-        padding: EdgeInsets.only(left: offset),
+        padding: EdgeInsets.only(left: actionsOffset(actionCount)),
         child: Text(label),
       ),
     );
