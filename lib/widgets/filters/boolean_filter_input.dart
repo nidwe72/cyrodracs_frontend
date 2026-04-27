@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'filter_field_style.dart';
 
 /// Tri-state boolean filter: `true` / `false` / `any`.
 /// Emits true, false, or null (any). No debounce — each click is a deliberate
@@ -38,7 +39,7 @@ class BooleanFilterInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 28,
+      height: kFilterFieldHeight,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

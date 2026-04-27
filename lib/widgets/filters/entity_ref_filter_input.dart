@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:graphql/client.dart';
 import '../../graphql_client.dart';
+import 'filter_field_style.dart';
 
 /// Per-column entity-ref filter widget. Shows a compact text field; on focus
 /// opens a floating overlay listing typeahead candidates from the backend
@@ -34,6 +36,9 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   final LayerLink _layerLink = LayerLink();
+  final ScrollController _scrollController = ScrollController();
+
+  static const double _itemHeight = 32.0;
 
   OverlayEntry? _overlay;
   Timer? _debounceTimer;
@@ -41,6 +46,7 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
   List<_Candidate> _candidates = const [];
   bool _loading = false;
   String? _error;
+  int _highlightedIndex = 0;
 
   @override
   void initState() {
@@ -62,6 +68,7 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
   void dispose() {
     _hideOverlay();
     _debounceTimer?.cancel();
+    _scrollController.dispose();
     _focusNode.dispose();
     _controller.dispose();
     super.dispose();
@@ -107,6 +114,7 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
       setState(() {
         _candidates = results;
         _loading = false;
+        _highlightedIndex = results.isEmpty ? -1 : 0;
       });
       _overlay?.markNeedsBuild();
     } catch (e) {
@@ -115,6 +123,7 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
         _candidates = const [];
         _error = e.toString();
         _loading = false;
+        _highlightedIndex = -1;
       });
       _overlay?.markNeedsBuild();
     }
@@ -167,6 +176,50 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
     _overlay = null;
   }
 
+  void _moveHighlight(int delta) {
+    if (_candidates.isEmpty) return;
+    final next = (_highlightedIndex + delta).clamp(0, _candidates.length - 1);
+    if (next == _highlightedIndex) return;
+    setState(() => _highlightedIndex = next);
+    _overlay?.markNeedsBuild();
+    _ensureHighlightVisible();
+  }
+
+  void _moveHighlightTo(int index) {
+    if (_candidates.isEmpty) return;
+    final next = index.clamp(0, _candidates.length - 1);
+    if (next == _highlightedIndex) return;
+    setState(() => _highlightedIndex = next);
+    _overlay?.markNeedsBuild();
+    _ensureHighlightVisible();
+  }
+
+  void _ensureHighlightVisible() {
+    if (!_scrollController.hasClients || _highlightedIndex < 0) return;
+    final viewport = _scrollController.position.viewportDimension;
+    final offset = _scrollController.offset;
+    final itemTop = _highlightedIndex * _itemHeight;
+    final itemBottom = itemTop + _itemHeight;
+    if (itemTop < offset) {
+      _scrollController.jumpTo(itemTop);
+    } else if (itemBottom > offset + viewport) {
+      _scrollController.jumpTo(itemBottom - viewport);
+    }
+  }
+
+  void _selectHighlighted() {
+    if (_highlightedIndex < 0 || _highlightedIndex >= _candidates.length) return;
+    _select(_candidates[_highlightedIndex]);
+  }
+
+  void _dismissOverlay() {
+    _hideOverlay();
+    final committed = widget.value?['label']?.toString() ?? '';
+    if (_controller.text != committed) {
+      _controller.text = committed;
+    }
+  }
+
   Widget _buildOverlay(BuildContext ctx) {
     return Positioned(
       width: 240,
@@ -207,13 +260,20 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
       );
     }
     return ListView.builder(
+      controller: _scrollController,
       shrinkWrap: true,
+      itemExtent: _itemHeight,
       itemCount: _candidates.length,
       itemBuilder: (_, i) {
         final c = _candidates[i];
+        final highlighted = i == _highlightedIndex;
         return InkWell(
           onTap: () => _select(c),
-          child: Padding(
+          onHover: (hovering) {
+            if (hovering) _moveHighlightTo(i);
+          },
+          child: Container(
+            color: highlighted ? Colors.blue.shade50 : null,
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: Text(c.label, style: const TextStyle(fontSize: 13)),
           ),
@@ -240,29 +300,40 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
   Widget build(BuildContext context) {
     return CompositedTransformTarget(
       link: _layerLink,
-      child: SizedBox(
-        width: 200,
-        height: 28,
-        child: TextField(
-          controller: _controller,
-          focusNode: _focusNode,
-          decoration: InputDecoration(
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            border: const OutlineInputBorder(),
-            suffixIcon: _controller.text.isNotEmpty
-                ? GestureDetector(
-                    onTap: _clear,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: Icon(Icons.clear, size: 14, color: Colors.grey.shade600),
-                    ),
-                  )
-                : null,
-            suffixIconConstraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 200),
+        child: FilterFieldShell(
+          child: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.arrowDown): () => _moveHighlight(1),
+              const SingleActivator(LogicalKeyboardKey.arrowUp): () => _moveHighlight(-1),
+              const SingleActivator(LogicalKeyboardKey.home): () => _moveHighlightTo(0),
+              const SingleActivator(LogicalKeyboardKey.end):
+                  () => _moveHighlightTo(_candidates.length - 1),
+              const SingleActivator(LogicalKeyboardKey.enter): _selectHighlighted,
+              const SingleActivator(LogicalKeyboardKey.numpadEnter): _selectHighlighted,
+              const SingleActivator(LogicalKeyboardKey.escape): _dismissOverlay,
+            },
+            child: TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              textAlignVertical: kFilterTextAlignVertical,
+              decoration: filterFieldInputDecoration().copyWith(
+                suffixIcon: _controller.text.isNotEmpty
+                    ? GestureDetector(
+                        onTap: _clear,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(Icons.clear, size: 14, color: Colors.grey.shade600),
+                        ),
+                      )
+                    : null,
+                suffixIconConstraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+              ),
+              style: kFilterFieldTextStyle,
+              onChanged: (v) => _scheduleSearch(v),
+            ),
           ),
-          style: const TextStyle(fontSize: 13),
-          onChanged: (v) => _scheduleSearch(v),
         ),
       ),
     );

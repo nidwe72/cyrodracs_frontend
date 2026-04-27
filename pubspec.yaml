@@ -35,9 +35,10 @@ dependencies:
   http: ^1.2.0
   graphql: ^5.2.0
   flutter_bootstrap5: ^1.1.1+1
-  date_picker_plus: 4.0.0
+  date_picker_plus: ^6.0.0
   re_editor: ^0.8.0
   re_highlight: ^0.0.3
+  trina_grid: ^2.2.1
 
 dev_dependencies:
   flutter_test:

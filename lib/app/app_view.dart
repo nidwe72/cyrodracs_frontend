@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:graphql/client.dart';
+import 'package:trina_grid/trina_grid.dart';
 import '../app_config_editor/app_config_service.dart';
 import '../graphql_client.dart';
 import '../basic/form_renderer_view.dart';
@@ -11,7 +12,9 @@ import '../models/editor_stack.dart';
 import '../theme/app_theme.dart';
 import '../widgets/filters/column_filter_input.dart';
 import '../widgets/filters/debouncer.dart';
-import '../widgets/sortable_column_header.dart';
+import '../widgets/grid/column_sort.dart';
+import '../widgets/grid/trina_grid_adapter.dart';
+import '../widgets/grid/trina_grid_theme.dart';
 
 /// Converts a SCREAMING_SNAKE_CASE backend type value to the camelCase name
 /// expected by [DataFormElementType.byName].
@@ -212,12 +215,27 @@ class _AppViewState extends State<AppView> {
   final Debouncer _filterDebouncer = Debouncer();
   int _fetchSeq = 0;
 
+  // TrinaGrid integration. We pass rows directly via the `rows` prop and
+  // remount the grid on each fetch by bumping `_gridGeneration` into the
+  // key. This bypasses TrinaGrid's didUpdateWidget (which doesn't react to
+  // `rows` / `columns` changes) and avoids the imperative
+  // removeAllRows/appendRows path, which leaves the body in a stale state
+  // for reasons not fully understood. Trade-off: user-driven column resize
+  // state is lost on each filter/sort/page change. Acceptable for v1.
+  // `_gridRebuildTrigger` rebuilds the reactive header (sort glyph, filter
+  // input) within a single TrinaGrid mount via AnimatedBuilder.
+  List<TrinaRow> _trinaRows = const [];
+  int _gridGeneration = 0;
+  final GridRebuildTrigger _gridRebuildTrigger = GridRebuildTrigger();
+  bool _initialFetchDone = false;
+
   @override
   void dispose() {
     for (final c in _filterControllers.values) {
       c.dispose();
     }
     _filterDebouncer.dispose();
+    _gridRebuildTrigger.dispose();
     super.dispose();
   }
 
@@ -363,11 +381,16 @@ class _AppViewState extends State<AppView> {
       });
 
   Future<void> _fetchEntities(_ViewDef def, {int page = 0}) async {
+    final viewChanged = _selectedDef?.code != def.code;
     setState(() {
       _selectedDef = def;
       _loading = true;
       _error = null;
       _editorStack.clear();
+      if (viewChanged) {
+        _initialFetchDone = false;
+        _trinaRows = const [];
+      }
     });
     final mySeq = ++_fetchSeq;
     try {
@@ -400,12 +423,18 @@ class _AppViewState extends State<AppView> {
       if (result.hasException) throw result.exception!;
       final body = result.data!['viewData'] as Map<String, dynamic>;
       final items = (body['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+      final fieldKeys = def.columns.map((c) => c.key).toList();
       setState(() {
         _entities = items;
+        _trinaRows = items
+            .map((e) => buildTrinaRow(entity: e, fieldKeys: fieldKeys))
+            .toList();
+        _gridGeneration++;
         _page = (body['page'] as num).toInt();
         _totalCount = (body['totalCount'] as num).toInt();
         _totalPages = (body['totalPages'] as num).toInt();
         _loading = false;
+        _initialFetchDone = true;
       });
     } catch (e) {
       if (mySeq != _fetchSeq || !mounted) return;
@@ -424,6 +453,7 @@ class _AppViewState extends State<AppView> {
         _columnFilters[columnKey] = value;
       }
     });
+    _gridRebuildTrigger.bump();
     _fetchEntities(_selectedDef!, page: 0);
   }
 
@@ -433,8 +463,10 @@ class _AppViewState extends State<AppView> {
       controller.clear();
     }
     setState(() => _columnFilters.clear());
+    _gridRebuildTrigger.bump();
     _fetchEntities(_selectedDef!, page: 0);
   }
+
 
   TextEditingController _ensureController(String columnKey, [String subkey = '']) {
     return _filterControllers.putIfAbsent(
@@ -463,17 +495,84 @@ class _AppViewState extends State<AppView> {
     return false;
   }
 
-  DataColumn _buildColumn(_ColDef col, {double leftOffset = 0}) {
-    return sortableDataColumn(
-      columnKey: col.key,
-      header: col.header,
-      activeSortKey: _sortColumnKey,
-      activeSortDirection: _sortDirection,
-      onSortToggle: _onSortToggle,
-      leftOffset: leftOffset,
-      filterInput: _buildFilterInputFor(col),
-      reserveFilterRow: _anyColumnFilterable,
-    );
+  /// Builds the full column list for the ENTITY_LIST grid:
+  /// `[edit-action?, ...data, delete-action]`. Action columns are
+  /// fixed-width and excluded from auto-size scaling, so the data
+  /// columns scale-fill the remaining width. The last data column gets
+  /// `enableResize: false` since its right neighbour is a fixed-width
+  /// action column with no resize affordance.
+  List<TrinaColumn> _buildAllTrinaColumns(_ViewDef def) {
+    final cols = <TrinaColumn>[];
+    final hasEdit = def.dataFormRef != null;
+
+    if (hasEdit) {
+      cols.add(buildTrinaActionColumn(
+        field: '__edit',
+        width: 40,
+        cellRenderer: (ctx) {
+          final entity = entityFromRow(ctx.row);
+          final id = (entity?['id'] as num?)?.toInt();
+          if (id == null) return const SizedBox.shrink();
+          return Center(
+            child: AppTheme.actionIcon(
+              icon: Icons.edit, tooltip: 'Edit',
+              onTap: () => _editEntity(id),
+            ),
+          );
+        },
+      ));
+    }
+
+    for (var i = 0; i < def.columns.length; i++) {
+      final col = def.columns[i];
+      final isLastDataColumn = i == def.columns.length - 1;
+      cols.add(buildTrinaColumn(
+        columnKey: col.key,
+        header: col.header,
+        rebuildOn: _gridRebuildTrigger,
+        getIsSortActive: () => _sortColumnKey == col.key,
+        getSortDirection: () =>
+            _sortColumnKey == col.key ? _sortDirection : null,
+        onSortToggle: _onSortToggle,
+        buildFilterInput: () => _buildFilterInputFor(col),
+        enableResize: !isLastDataColumn,
+        cellRenderer: _dataCellRenderer(col),
+      ));
+    }
+
+    cols.add(buildTrinaActionColumn(
+      field: '__delete',
+      width: 40,
+      cellRenderer: (ctx) {
+        final entity = entityFromRow(ctx.row);
+        final id = (entity?['id'] as num?)?.toInt();
+        if (id == null) return const SizedBox.shrink();
+        return Center(
+          child: AppTheme.actionIcon(
+            icon: Icons.delete, tooltip: 'Delete',
+            onTap: () => _confirmDelete(id, entity?['name']),
+          ),
+        );
+      },
+    ));
+
+    return cols;
+  }
+
+  TrinaColumnRenderer _dataCellRenderer(_ColDef col) {
+    return (ctx) {
+      final entity = entityFromRow(ctx.row);
+      final value = entity?[col.key];
+      final text = value == null ? '' : value.toString();
+      return Tooltip(
+        message: text,
+        waitDuration: const Duration(milliseconds: 600),
+        child: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Text(text, overflow: TextOverflow.ellipsis, maxLines: 1),
+        ),
+      );
+    };
   }
 
   void _resetFilterStateForViewChange() {
@@ -690,6 +789,7 @@ class _AppViewState extends State<AppView> {
       _sortColumnKey = next == null ? null : columnKey;
       _sortDirection = next;
     });
+    _gridRebuildTrigger.bump();
     _fetchEntities(_selectedDef!, page: 0);
   }
 
@@ -922,10 +1022,19 @@ class _AppViewState extends State<AppView> {
 
   Widget _buildEntityTable() {
     final def = _selectedDef!;
-    return Padding(
-      padding: const EdgeInsets.all(AppTheme.spacingMd),
-      child: Card(
-        child: Column(
+    // Pull the form-input outline colour from the theme; the
+    // panel-header → column-header separator uses a 30 % lighter
+    // version of that shade for visual consistency with other
+    // form-element borders without competing with them.
+    final borderColor = Theme.of(context).inputDecorationTheme.border
+            is OutlineInputBorder
+        ? (Theme.of(context).inputDecorationTheme.border as OutlineInputBorder)
+            .borderSide.color
+        : Colors.grey;
+    final separatorColor =
+        Color.lerp(borderColor, Colors.white, 0.3) ?? borderColor;
+    return Card(
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Panel header
@@ -967,85 +1076,46 @@ class _AppViewState extends State<AppView> {
                 ],
               ),
             ),
-            const Divider(height: 1, thickness: 1),
-            // Content — fills remaining height, scrollable
-            if (_entities.isEmpty)
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(AppTheme.spacingMd),
-                  child: Text('No ${def.label.toLowerCase()} found.',
-                      style: const TextStyle(color: Colors.grey)),
-                ),
-              )
-            else
-              Expanded(
-                child: SingleChildScrollView(
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: DataTable(
-                      headingRowHeight: _anyColumnFilterable ? 88 : 56,
-                      columns: [
-                        if (def.columns.isNotEmpty)
-                          _buildColumn(def.columns.first, leftOffset: AppTheme.actionsOffset(1)),
-                        ...def.columns.skip(1).map((c) => _buildColumn(c)),
-                      ],
-                      rows: _entities.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final e = entry.value;
-                        final id = (e['id'] as num).toInt();
-                        final lastColIndex = def.columns.length - 1;
-                        final deleteAction = AppTheme.actionIcon(
-                          icon: Icons.delete,
-                          tooltip: 'Delete',
-                          onTap: () => _confirmDelete(id, e['name']),
-                        );
-                        final editActions = [
-                          if (def.dataFormRef != null)
-                            AppTheme.actionIcon(
-                              icon: Icons.edit,
-                              tooltip: 'Edit',
-                              onTap: () => _editEntity(id),
-                            ),
-                        ];
-                        return DataRow(
-                          color: AppTheme.stripeColor(index),
-                          cells: [
-                            if (def.columns.length == 1)
-                              // Single column: edit + data + delete all in one cell
-                              DataCell(Row(
-                                children: [
-                                  ...editActions,
-                                  if (editActions.isNotEmpty) const SizedBox(width: 8),
-                                  Expanded(child: Text('${e[def.columns.first.key] ?? ''}', overflow: TextOverflow.ellipsis)),
-                                  const SizedBox(width: 8),
-                                  deleteAction,
-                                ],
-                              )),
-                            if (def.columns.length > 1) ...[
-                              // First column: edit icon + data
-                              AppTheme.cellWithActions(
-                                '${e[def.columns.first.key] ?? ''}',
-                                editActions,
-                              ),
-                              // Middle data columns
-                              ...def.columns.skip(1).take(lastColIndex > 0 ? lastColIndex - 1 : 0)
-                                  .map((c) => DataCell(Text('${e[c.key] ?? ''}'))),
-                              // Last column: data + delete icon
-                              AppTheme.cellWithTrailingActions(
-                                '${e[def.columns.last.key] ?? ''}',
-                                [deleteAction],
-                              ),
-                            ],
-                          ],
-                        );
-                      }).toList(),
+            Container(height: 1, color: separatorColor),
+            // Content — TrinaGrid owns its own scrolling and sticky header.
+            // Per `components.md` C1.10 the package's filter/edit UIs are
+            // bypassed; columns + rows are wired through `trina_grid_adapter`.
+            Expanded(
+              child: Stack(
+                children: [
+                  TrinaGrid(
+                    // Generation in the key forces remount on each fetch —
+                    // see `_gridGeneration` field for rationale.
+                    key: ValueKey('entity-list:${def.code}:$_gridGeneration'),
+                    columns: _buildAllTrinaColumns(def),
+                    // Trina wires `rows` into a FilteredList whose addAll
+                    // mutates it; the list must be mutable (not const).
+                    rows: _trinaRows.toList(),
+                    configuration: trinaGridConfigForApp(
+                      columnHeight: _anyColumnFilterable ? 88 : 44,
                     ),
+                    noRowsWidget: _initialFetchDone && _entities.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.all(AppTheme.spacingMd),
+                            child: Text('No ${def.label.toLowerCase()} found.',
+                                style: const TextStyle(color: Colors.grey)),
+                          )
+                        : null,
                   ),
-                ),
+                  if (_loading && !_initialFetchDone)
+                    const Positioned.fill(
+                      child: ColoredBox(
+                        color: Color(0x80FFFFFF),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    ),
+                ],
               ),
+            ),
             // Pagination
             if (_totalPages > 1)
-              Padding(
+              Container(
+                color: AppTheme.panelHeaderBackground,
                 padding: const EdgeInsets.only(
                   top: AppTheme.spacingSm,
                   bottom: AppTheme.spacingSm,
@@ -1089,8 +1159,7 @@ class _AppViewState extends State<AppView> {
               ),
           ],
         ),
-      ),
-    );
+      );
   }
 
   Future<void> _confirmDelete(int id, dynamic name) async {

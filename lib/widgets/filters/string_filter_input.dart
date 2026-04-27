@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'debouncer.dart';
+import 'filter_field_style.dart';
 
 /// A single text field that fires [onChanged] after [debounce] of quiet typing.
 /// The owning widget is responsible for storing the latest value and composing
@@ -18,20 +19,18 @@ class StringFilterInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 160,
-      height: 28,
-      child: TextField(
-        controller: controller,
-        decoration: const InputDecoration(
-          isDense: true,
-          contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          border: OutlineInputBorder(),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 160),
+      child: FilterFieldShell(
+        child: TextField(
+          controller: controller,
+          textAlignVertical: kFilterTextAlignVertical,
+          decoration: filterFieldInputDecoration(),
+          style: kFilterFieldTextStyle,
+          onChanged: (value) {
+            debouncer.run(() => onChanged(value));
+          },
         ),
-        style: const TextStyle(fontSize: 13),
-        onChanged: (value) {
-          debouncer.run(() => onChanged(value));
-        },
       ),
     );
   }

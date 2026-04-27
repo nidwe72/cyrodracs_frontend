@@ -1,19 +1,22 @@
 import 'package:flutter/material.dart';
+import 'filter_field_style.dart';
 
 /// Compact button-like field used by date / year-month / datetime range
 /// filters. Shows [text] in normal style, or [placeholder] in muted style,
-/// and an inline clear icon when [onClear] is non-null.
+/// and an inline clear icon when [onClear] is non-null. When [width] is
+/// null, the button takes its parent's bounded horizontal constraint
+/// (e.g. an `Expanded` parent in a Row).
 class PickerButton extends StatelessWidget {
   const PickerButton({
     super.key,
-    required this.width,
+    this.width,
     required this.text,
     required this.placeholder,
     required this.onTap,
     this.onClear,
   });
 
-  final double width;
+  final double? width;
   final String? text;
   final String placeholder;
   final VoidCallback onTap;
@@ -22,18 +25,18 @@ class PickerButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasValue = text != null && text!.isNotEmpty;
-    return SizedBox(
+    final inner = SizedBox(
       width: width,
-      height: 28,
+      height: kFilterFieldHeight,
       child: Material(
         color: Colors.white,
         shape: RoundedRectangleBorder(
           side: BorderSide(color: Colors.grey.shade400),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.zero,
         ),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.zero,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6),
             child: Row(
@@ -41,10 +44,9 @@ class PickerButton extends StatelessWidget {
                 Expanded(
                   child: Text(
                     hasValue ? text! : placeholder,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: hasValue ? Colors.black87 : Colors.grey.shade500,
-                    ),
+                    style: hasValue
+                        ? kFilterFieldTextStyle.copyWith(color: Colors.black87)
+                        : kFilterFieldHintStyle,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -62,6 +64,11 @@ class PickerButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+    if (width != null) return inner;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 100),
+      child: inner,
     );
   }
 }

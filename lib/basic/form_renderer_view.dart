@@ -2,6 +2,7 @@ import 'package:date_picker_plus/date_picker_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bootstrap5/flutter_bootstrap5.dart';
 import 'package:graphql/client.dart';
+import 'package:trina_grid/trina_grid.dart';
 import '../app_config_editor/app_config_service.dart';
 import '../graphql_client.dart';
 import '../models/data_form.dart';
@@ -11,7 +12,9 @@ import '../models/editor_stack.dart';
 import '../theme/app_theme.dart';
 import '../widgets/filters/column_filter_input.dart';
 import '../widgets/filters/debouncer.dart';
-import '../widgets/sortable_column_header.dart';
+import '../widgets/grid/column_sort.dart';
+import '../widgets/grid/trina_grid_adapter.dart';
+import '../widgets/grid/trina_grid_theme.dart';
 
 /// Callback for GRID add/edit actions: pushes a child editor.
 typedef GridActionCallback = void Function({
@@ -1409,7 +1412,6 @@ class _GridField extends StatefulWidget {
 }
 
 class _GridFieldState extends State<_GridField> {
-  List<Map<String, dynamic>> _rows = [];
   bool _loading = false;
   String? _error;
   int _page = 0;
@@ -1429,75 +1431,63 @@ class _GridFieldState extends State<_GridField> {
   final Debouncer _filterDebouncer = Debouncer();
   int _fetchSeq = 0;
 
+  // TrinaGrid integration. Same pattern as `app_view.dart` ENTITY_LIST:
+  // rows pushed via `rows` prop, generation key forces remount per fetch
+  // (rationale documented in `app_view.dart`). Reactive header (sort glyph,
+  // filter input) refreshes via the GridRebuildTrigger.
+  List<TrinaRow> _trinaRows = const [];
+  int _gridGeneration = 0;
+  final GridRebuildTrigger _gridRebuildTrigger = GridRebuildTrigger();
+
   @override
   void dispose() {
     for (final c in _filterControllers.values) {
       c.dispose();
     }
     _filterDebouncer.dispose();
+    _gridRebuildTrigger.dispose();
     super.dispose();
   }
 
-  List<Widget> _buildPendingTable() {
-    return [
-      SizedBox(
-        width: double.infinity,
-        child: DataTable(
-          columns: [
-            ...widget.tableColumns
-                .map((c) => DataColumn(label: Text(c.header))),
-          ],
-          rows: widget.pendingRows.asMap().entries.map((entry) {
-            final index = entry.key;
-            final pending = entry.value;
-            return DataRow(
-              color: WidgetStateProperty.all(Colors.amber.shade50),
-              cells: [
-                // Data columns (except last)
-                ...widget.tableColumns.take(widget.tableColumns.length > 1 ? widget.tableColumns.length - 1 : 1)
-                    .map((c) => DataCell(
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '${pending.displayValues[c.key] ?? pending.values[c.key] ?? ''}',
-                            style: const TextStyle(fontStyle: FontStyle.italic),
-                          ),
-                          if (index == 0 && c == widget.tableColumns.first)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: Colors.amber.shade200,
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                                child: const Text('pending', style: TextStyle(fontSize: 10)),
-                              ),
-                            ),
-                        ],
-                      ),
-                    )),
-                // Last column: data + remove icon
-                if (widget.tableColumns.length > 1)
-                  AppTheme.cellWithTrailingActions(
-                    '${pending.displayValues[widget.tableColumns.last.key] ?? pending.values[widget.tableColumns.last.key] ?? ''}',
-                    [
-                      AppTheme.actionIcon(
-                        icon: Icons.close,
-                        tooltip: 'Remove',
-                        onTap: widget.onRemovePending != null
-                            ? () => widget.onRemovePending!(index)
-                            : null,
-                      ),
-                    ],
-                  ),
-              ],
-            );
-          }).toList(),
-        ),
-      ),
-    ];
+  /// Builds TrinaRows for pending children (un-saved entries), tagging
+  /// each with metadata so the cell renderer knows to apply the
+  /// pending styling (italic text, amber background, pending badge on
+  /// the first cell of the first row, remove icon instead of edit/delete).
+  List<TrinaRow> _buildPendingTrinaRows() {
+    final fieldKeys = widget.tableColumns.map((c) => c.key).toList();
+    return widget.pendingRows.asMap().entries.map((entry) {
+      final i = entry.key;
+      final pending = entry.value;
+      final entityForRow = <String, dynamic>{};
+      for (final key in fieldKeys) {
+        entityForRow[key] = pending.displayValues[key] ?? pending.values[key];
+      }
+      return buildTrinaRow(
+        entity: entityForRow,
+        fieldKeys: fieldKeys,
+        metadata: {'pending': true, 'pendingIndex': i},
+      );
+    }).toList();
+  }
+
+  /// Effective rows for the GRID — pending when the parent isn't saved
+  /// yet, committed otherwise. Mutually exclusive in current behaviour.
+  List<TrinaRow> _effectiveRows() {
+    if (widget.entityId == null) {
+      return _buildPendingTrinaRows();
+    }
+    return _trinaRows.toList();
+  }
+
+  Color _rowColor(TrinaRowColorContext ctx) {
+    if (ctx.row.metadata?['pending'] == true) {
+      return Colors.amber.shade50;
+    }
+    // Preserve zebra striping for committed rows — rowColorCallback
+    // overrides TrinaGridStyleConfig.evenRowColor / oddRowColor, so we
+    // re-implement the alternation here. First row (rowIdx 0) white,
+    // second row tinted, matching the ENTITY_LIST surface.
+    return ctx.rowIdx.isEven ? Colors.white : AppTheme.tableStripeColor;
   }
 
   Future<void> _confirmDelete(int rowId) async {
@@ -1531,6 +1521,17 @@ class _GridFieldState extends State<_GridField> {
     _fetchColumnMeta();
     if (widget.entityId != null) {
       _fetchData();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_GridField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Pending rows are owned by the parent; when its list grows or shrinks
+    // (Add / Remove pending), bump the generation so the keyed TrinaGrid
+    // remounts with the fresh row set.
+    if (widget.pendingRows.length != oldWidget.pendingRows.length) {
+      setState(() => _gridGeneration++);
     }
   }
 
@@ -1669,6 +1670,7 @@ class _GridFieldState extends State<_GridField> {
       }
       _page = 0;
     });
+    _gridRebuildTrigger.bump();
     _fetchData();
   }
 
@@ -1681,6 +1683,7 @@ class _GridFieldState extends State<_GridField> {
       _columnFilters.clear();
       _page = 0;
     });
+    _gridRebuildTrigger.bump();
     _fetchData();
   }
 
@@ -1710,17 +1713,133 @@ class _GridFieldState extends State<_GridField> {
     return false;
   }
 
-  DataColumn _buildHeaderColumn(GridTableColumn col, {double leftOffset = 0}) {
-    return sortableDataColumn(
-      columnKey: col.key,
-      header: col.header,
-      activeSortKey: _sortColumnKey,
-      activeSortDirection: _sortDirection,
-      onSortToggle: _onSortToggle,
-      leftOffset: leftOffset,
-      filterInput: _buildFilterInputFor(col),
-      reserveFilterRow: _anyColumnFilterable,
-    );
+  /// Builds the full column list for the GRID:
+  /// `[edit-action?, ...data, delete-action?]`. Only present when the
+  /// corresponding handler is configured. Pending rows render the
+  /// "remove" (×) icon in the delete column and a "pending" badge on
+  /// the first cell of the first pending data column.
+  List<TrinaColumn> _buildAllTrinaColumns() {
+    final cols = <TrinaColumn>[];
+    final hasEdit = widget.onEditAction != null;
+    final hasDelete = widget.onDeleteAction != null;
+    final hasRemove = widget.onRemovePending != null;
+    final hasTrailing = hasDelete || hasRemove;
+
+    if (hasEdit) {
+      cols.add(buildTrinaActionColumn(
+        field: '__edit',
+        width: 40,
+        cellRenderer: (ctx) {
+          final entity = entityFromRow(ctx.row);
+          final isPending = ctx.row.metadata?['pending'] == true;
+          if (isPending) return const SizedBox.shrink();
+          final rowId = (entity?['id'] as num?)?.toInt();
+          if (rowId == null) return const SizedBox.shrink();
+          return Center(
+            child: AppTheme.actionIcon(
+              icon: Icons.edit, tooltip: 'Edit',
+              onTap: () => widget.onEditAction!(rowId),
+            ),
+          );
+        },
+      ));
+    }
+
+    for (var i = 0; i < widget.tableColumns.length; i++) {
+      final col = widget.tableColumns[i];
+      final isFirstDataColumn = i == 0;
+      final isLastDataColumn = i == widget.tableColumns.length - 1;
+      cols.add(buildTrinaColumn(
+        columnKey: col.key,
+        header: col.header,
+        rebuildOn: _gridRebuildTrigger,
+        getIsSortActive: () => _sortColumnKey == col.key,
+        getSortDirection: () =>
+            _sortColumnKey == col.key ? _sortDirection : null,
+        onSortToggle: _onSortToggle,
+        buildFilterInput: () => _buildFilterInputFor(col),
+        enableResize: !(isLastDataColumn && hasTrailing),
+        cellRenderer: _dataCellRenderer(col, isFirstDataColumn: isFirstDataColumn),
+      ));
+    }
+
+    if (hasTrailing) {
+      cols.add(buildTrinaActionColumn(
+        field: '__delete',
+        width: 40,
+        cellRenderer: (ctx) {
+          final entity = entityFromRow(ctx.row);
+          final isPending = ctx.row.metadata?['pending'] == true;
+          if (isPending) {
+            if (!hasRemove) return const SizedBox.shrink();
+            final pendingIndex = ctx.row.metadata!['pendingIndex'] as int;
+            return Center(
+              child: AppTheme.actionIcon(
+                icon: Icons.close,
+                tooltip: 'Remove',
+                onTap: () => widget.onRemovePending!(pendingIndex),
+              ),
+            );
+          }
+          if (!hasDelete) return const SizedBox.shrink();
+          final rowId = (entity?['id'] as num?)?.toInt();
+          if (rowId == null) return const SizedBox.shrink();
+          return Center(
+            child: AppTheme.actionIcon(
+              icon: Icons.delete, tooltip: 'Delete',
+              onTap: () => _confirmDelete(rowId),
+            ),
+          );
+        },
+      ));
+    }
+
+    return cols;
+  }
+
+  TrinaColumnRenderer _dataCellRenderer(
+    GridTableColumn col, {
+    required bool isFirstDataColumn,
+  }) {
+    return (ctx) {
+      final entity = entityFromRow(ctx.row);
+      final isPending = ctx.row.metadata?['pending'] == true;
+      final value = entity?[col.key];
+      final text = value == null ? '' : value.toString();
+      final showBadge = isPending && ctx.rowIdx == 0 && isFirstDataColumn;
+
+      Widget textCell() => Tooltip(
+            message: text,
+            waitDuration: const Duration(milliseconds: 600),
+            child: Text(
+              text,
+              style: isPending
+                  ? const TextStyle(fontStyle: FontStyle.italic)
+                  : null,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          );
+
+      if (showBadge) {
+        return Row(children: [
+          Flexible(child: textCell()),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade200,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: const Text('pending', style: TextStyle(fontSize: 10)),
+          ),
+        ]);
+      }
+      return Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: textCell(),
+      );
+    };
   }
 
   void _onSortToggle(String columnKey) {
@@ -1731,6 +1850,7 @@ class _GridFieldState extends State<_GridField> {
       _sortDirection = next;
       _page = 0;
     });
+    _gridRebuildTrigger.bump();
     _fetchData();
   }
 
@@ -1783,8 +1903,13 @@ class _GridFieldState extends State<_GridField> {
       if (mySeq != _fetchSeq || !mounted) return;
       if (result.hasException) throw result.exception!;
       final data = result.data!['gridData'] as Map<String, dynamic>;
+      final items = (data['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+      final fieldKeys = widget.tableColumns.map((c) => c.key).toList();
       setState(() {
-        _rows = (data['items'] as List<dynamic>).cast<Map<String, dynamic>>();
+        _trinaRows = items
+            .map((e) => buildTrinaRow(entity: e, fieldKeys: fieldKeys))
+            .toList();
+        _gridGeneration++;
         _totalCount = (data['totalCount'] as num).toInt();
         _page = (data['page'] as num).toInt();
         _totalPages = (data['totalPages'] as num).toInt();
@@ -1806,10 +1931,20 @@ class _GridFieldState extends State<_GridField> {
         ? (Theme.of(context).inputDecorationTheme.border as OutlineInputBorder)
             .borderSide.color
         : Colors.grey;
+    // 30 % lighter than the form-input border so the in-table separator
+    // recedes a bit relative to the GRID's outer border.
+    final separatorColor =
+        Color.lerp(borderColor, Colors.white, 0.3) ?? borderColor;
 
     return SizedBox(
       width: double.infinity,
+      // GRIDs use the same border colour as the form inputs around them
+      // for visual consistency inside a DataForm editor.
       child: Card(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: borderColor),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1817,9 +1952,8 @@ class _GridFieldState extends State<_GridField> {
             Container(
               width: double.infinity,
               padding: AppTheme.panelHeaderPadding,
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: AppTheme.panelHeaderBackground,
-                border: Border(bottom: BorderSide(color: borderColor)),
               ),
               child: Row(
                 children: [
@@ -1863,24 +1997,18 @@ class _GridFieldState extends State<_GridField> {
                 ],
               ),
             ),
-          // Content
-          if (widget.entityId == null && widget.pendingRows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(AppTheme.spacingMd),
-              child: Text(
-                'No entries yet. Use + to add.',
-                style: TextStyle(color: Colors.grey),
-              ),
-            )
-          else if (widget.entityId == null && widget.pendingRows.isNotEmpty)
-            // Show only pending rows (parent not saved yet)
-            ..._buildPendingTable()
-          else if (_loading)
+          Container(height: 1, color: separatorColor),
+          // Content. Loading + error remain top-level branches that
+          // replace the table; otherwise a single TrinaGrid renders both
+          // pending (parent un-saved) and committed (parent saved) rows
+          // via row metadata + rowColorCallback. Empty state is selected
+          // by entityId for a context-appropriate message.
+          if (widget.entityId != null && _loading)
             const Center(child: Padding(
               padding: EdgeInsets.all(AppTheme.spacingLg),
               child: CircularProgressIndicator(),
             ))
-          else if (_error != null)
+          else if (widget.entityId != null && _error != null)
             Padding(
               padding: const EdgeInsets.all(AppTheme.spacingMd),
               child: Column(
@@ -1892,76 +2020,36 @@ class _GridFieldState extends State<_GridField> {
                 ],
               ),
             )
-          else if (_rows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(AppTheme.spacingMd),
-              child: Text('No entries.', style: TextStyle(color: Colors.grey)),
-            )
           else ...[
+            // Bounded height: GRID lives inside a scrollable form, so
+            // Expanded would be unbounded — fixed SizedBox instead.
             SizedBox(
+              height: 320,
               width: double.infinity,
-              child: DataTable(
-                headingRowHeight: _anyColumnFilterable ? 88 : 56,
-                columns: [
-                  if (widget.tableColumns.isNotEmpty)
-                    _buildHeaderColumn(widget.tableColumns.first,
-                        leftOffset: AppTheme.actionsOffset(1)),
-                  ...widget.tableColumns.skip(1).map(_buildHeaderColumn),
-                ],
-                rows: _rows.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final row = entry.value;
-                  final rowId = row['id'] != null ? (row['id'] as num).toInt() : null;
-                  final lastColIndex = widget.tableColumns.length - 1;
-                  final editActions = [
-                    if (widget.onEditAction != null && rowId != null)
-                      AppTheme.actionIcon(
-                        icon: Icons.edit,
-                        tooltip: 'Edit',
-                        onTap: () => widget.onEditAction!(rowId),
-                      ),
-                  ];
-                  final deleteActions = [
-                    if (widget.onDeleteAction != null && rowId != null)
-                      AppTheme.actionIcon(
-                        icon: Icons.delete,
-                        tooltip: 'Delete',
-                        onTap: () => _confirmDelete(rowId),
-                      ),
-                  ];
-                  return DataRow(
-                    color: AppTheme.stripeColor(index),
-                    cells: [
-                      if (widget.tableColumns.length == 1)
-                        DataCell(Row(
-                          children: [
-                            ...editActions,
-                            if (editActions.isNotEmpty) const SizedBox(width: 8),
-                            Expanded(child: Text('${row[widget.tableColumns.first.key] ?? ''}', overflow: TextOverflow.ellipsis)),
-                            const SizedBox(width: 8),
-                            ...deleteActions,
-                          ],
-                        )),
-                      if (widget.tableColumns.length > 1) ...[
-                        AppTheme.cellWithActions(
-                          '${row[widget.tableColumns.first.key] ?? ''}',
-                          editActions,
-                        ),
-                        ...widget.tableColumns.skip(1).take(lastColIndex > 0 ? lastColIndex - 1 : 0)
-                            .map((c) => DataCell(Text('${row[c.key] ?? ''}'))),
-                        AppTheme.cellWithTrailingActions(
-                          '${row[widget.tableColumns.last.key] ?? ''}',
-                          deleteActions,
-                        ),
-                      ],
-                    ],
-                  );
-                }).toList(),
+              child: TrinaGrid(
+                key: ValueKey(
+                    'grid:${widget.dataFormCode}:${widget.elementCode}:$_gridGeneration'),
+                columns: _buildAllTrinaColumns(),
+                rows: _effectiveRows(),
+                rowColorCallback: _rowColor,
+                configuration: trinaGridConfigForApp(
+                  columnHeight: _anyColumnFilterable ? 88 : 44,
+                ),
+                noRowsWidget: Padding(
+                  padding: const EdgeInsets.all(AppTheme.spacingMd),
+                  child: Text(
+                    widget.entityId == null
+                        ? 'No entries yet. Use + to add.'
+                        : 'No entries.',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                ),
               ),
             ),
             // Pagination
             if (_totalPages > 1)
-              Padding(
+              Container(
+                color: AppTheme.panelHeaderBackground,
                 padding: const EdgeInsets.only(
                   top: AppTheme.spacingSm,
                   bottom: AppTheme.spacingSm,

@@ -48,22 +48,23 @@ class YearMonthRangeFilterInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
-        PickerButton(
-          width: 90,
-          text: value?['from'],
-          placeholder: 'from',
-          onTap: () => _pick(context, 'from'),
-          onClear: value?['from'] != null ? () => _emit(null, value?['to']) : null,
+        Expanded(
+          child: PickerButton(
+            text: value?['from'],
+            placeholder: 'from',
+            onTap: () => _pick(context, 'from'),
+            onClear: value?['from'] != null ? () => _emit(null, value?['to']) : null,
+          ),
         ),
         const SizedBox(width: 4),
-        PickerButton(
-          width: 90,
-          text: value?['to'],
-          placeholder: 'to',
-          onTap: () => _pick(context, 'to'),
-          onClear: value?['to'] != null ? () => _emit(value?['from'], null) : null,
+        Expanded(
+          child: PickerButton(
+            text: value?['to'],
+            placeholder: 'to',
+            onTap: () => _pick(context, 'to'),
+            onClear: value?['to'] != null ? () => _emit(value?['from'], null) : null,
+          ),
         ),
       ],
     );

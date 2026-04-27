@@ -24,7 +24,7 @@ class MyApp extends StatelessWidget {
                 foregroundColor: bs.colors.white,
                 elevation: 0,
               ),
-              tabBarTheme: TabBarTheme(
+              tabBarTheme: TabBarThemeData(
                 labelColor: bs.colors.primary,
                 unselectedLabelColor: bs.colors.secondary,
                 indicatorColor: bs.colors.primary,
@@ -59,15 +59,15 @@ class MyApp extends StatelessWidget {
                 floatingLabelBehavior: FloatingLabelBehavior.always,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               ),
-              cardTheme: CardTheme(
+              cardTheme: CardThemeData(
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.zero,
-                  side: BorderSide(color: bs.colors.secondary),
+                  side: BorderSide(color: Colors.grey.shade200),
                 ),
                 elevation: 0,
                 margin: EdgeInsets.zero,
               ),
-              dialogTheme: const DialogTheme(
+              dialogTheme: const DialogThemeData(
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
               ),
               dataTableTheme: DataTableThemeData(

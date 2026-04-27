@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'debouncer.dart';
+import 'filter_field_style.dart';
 
 /// Side-by-side `from` / `to` numeric inputs. Either may be empty.
 /// Emits a `Map<String, String>` with non-empty `from` / `to` keys, or null
@@ -29,22 +30,18 @@ class NumberRangeFilterInput extends StatelessWidget {
   }
 
   Widget _field(TextEditingController controller, String hint) {
-    return SizedBox(
-      width: 76,
-      height: 28,
-      child: TextField(
-        controller: controller,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.\-]'))],
-        decoration: InputDecoration(
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          hintText: hint,
-          hintStyle: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-          border: const OutlineInputBorder(),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 80),
+      child: FilterFieldShell(
+        child: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.\-]'))],
+          textAlignVertical: kFilterTextAlignVertical,
+          decoration: filterFieldInputDecoration(hintText: hint),
+          style: kFilterFieldTextStyle,
+          onChanged: (_) => debouncer.run(_emit),
         ),
-        style: const TextStyle(fontSize: 13),
-        onChanged: (_) => debouncer.run(_emit),
       ),
     );
   }
@@ -52,11 +49,10 @@ class NumberRangeFilterInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
-        _field(fromController, 'from'),
+        Expanded(child: _field(fromController, 'from')),
         const SizedBox(width: 4),
-        _field(toController, 'to'),
+        Expanded(child: _field(toController, 'to')),
       ],
     );
   }
