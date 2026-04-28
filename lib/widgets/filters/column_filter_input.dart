@@ -22,6 +22,15 @@ import 'year_month_range_filter_input.dart';
 /// Scope params ([viewNodeCode] / [dataFormCode] / [elementCode]) are
 /// required by the ENTITY_REF picker so it can fetch candidates from the
 /// correct table surface. Other types ignore them.
+///
+/// CF3.4.3 picker-restriction params (ENTITY_REF only):
+/// - [userFilter] — the host's full active CF1 user-filter tree, for the
+///   backend to strip the picker's own column and run the inner DISTINCT.
+/// - [editorEntityId] — the parent editor entity's id when the surface is a
+///   GRID inside an editor (drives the Janino injectable's editor-entity).
+/// - [dismissTrigger] — a [Listenable] that fires whenever any column filter
+///   changes; the picker overlay closes on each tick to avoid showing stale
+///   candidates relative to the now-changed `otherUserFilters`.
 Widget? buildColumnFilterInput({
   required ColumnFilterMeta meta,
   required dynamic currentValue,
@@ -31,6 +40,9 @@ Widget? buildColumnFilterInput({
   String? viewNodeCode,
   String? dataFormCode,
   String? elementCode,
+  Map<String, dynamic>? userFilter,
+  int? editorEntityId,
+  Listenable? dismissTrigger,
 }) {
   switch (meta.filterType) {
     case ColumnFilterType.string:
@@ -88,6 +100,9 @@ Widget? buildColumnFilterInput({
         viewNodeCode: viewNodeCode,
         dataFormCode: dataFormCode,
         elementCode: elementCode,
+        userFilter: userFilter,
+        editorEntityId: editorEntityId,
+        dismissTrigger: dismissTrigger,
         onChanged: (v) => onChanged(meta.columnKey, v),
       );
     case ColumnFilterType.unsupported:

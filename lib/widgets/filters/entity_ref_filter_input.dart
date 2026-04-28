@@ -18,6 +18,9 @@ class EntityRefFilterInput extends StatefulWidget {
     this.viewNodeCode,
     this.dataFormCode,
     this.elementCode,
+    this.userFilter,
+    this.editorEntityId,
+    this.dismissTrigger,
   });
 
   /// `{ id: int, label: String }` when a candidate is selected, else null.
@@ -26,6 +29,21 @@ class EntityRefFilterInput extends StatefulWidget {
   final String? viewNodeCode;
   final String? dataFormCode;
   final String? elementCode;
+
+  /// Full active CF1 user-filter tree from the host. Backend strips the
+  /// picker's own column (CF3.4.3 step 1).
+  final Map<String, dynamic>? userFilter;
+
+  /// Parent editor entity id for GRID surfaces inside an editor. Drives the
+  /// Janino injectable's `getInjectionContext().getEditorEntity()`. Null on
+  /// ENTITY_LIST surfaces.
+  final int? editorEntityId;
+
+  /// Fires whenever any column filter on the host changes. The picker
+  /// overlay closes on each tick — `otherUserFilters` would otherwise have
+  /// shifted under it (CF3.4.3 *Recomputation and invalidation*).
+  final Listenable? dismissTrigger;
+
   final void Function(Map<String, dynamic>? value) onChanged;
 
   @override
@@ -48,11 +66,17 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
   String? _error;
   int _highlightedIndex = 0;
 
+  /// Term that produced the current `_candidates`. Empty means "cold open"
+  /// (no typeahead applied) — used to choose between two distinct empty-state
+  /// messages: a restriction-collapsed empty (CF3.4.3) vs. a typeahead-miss.
+  String _lastAppliedTerm = '';
+
   @override
   void initState() {
     super.initState();
     _controller.text = widget.value?['label']?.toString() ?? '';
     _focusNode.addListener(_onFocusChange);
+    widget.dismissTrigger?.addListener(_onHostFilterChanged);
   }
 
   @override
@@ -62,10 +86,15 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
     if (newLabel != _controller.text && !_focusNode.hasFocus) {
       _controller.text = newLabel;
     }
+    if (oldWidget.dismissTrigger != widget.dismissTrigger) {
+      oldWidget.dismissTrigger?.removeListener(_onHostFilterChanged);
+      widget.dismissTrigger?.addListener(_onHostFilterChanged);
+    }
   }
 
   @override
   void dispose() {
+    widget.dismissTrigger?.removeListener(_onHostFilterChanged);
     _hideOverlay();
     _debounceTimer?.cancel();
     _scrollController.dispose();
@@ -74,10 +103,35 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
     super.dispose();
   }
 
+  /// Host signalled a filter-state change on some other column. Drop any
+  /// in-flight typeahead and dismiss the overlay — `otherUserFilters` has
+  /// shifted, so the candidate set on screen is stale (CF3.4.3
+  /// *Recomputation and invalidation*).
+  void _onHostFilterChanged() {
+    if (!mounted) return;
+    if (_overlay == null && !_focusNode.hasFocus) return;
+    _seq++;                       // invalidate any in-flight fetch
+    _debounceTimer?.cancel();
+    _hideOverlay();
+    if (_focusNode.hasFocus) _focusNode.unfocus();
+  }
+
   void _onFocusChange() {
     if (_focusNode.hasFocus) {
       _showOverlay();
-      _scheduleSearch(_controller.text, immediate: true);
+      // Always open with all restricted candidates — never seed the typeahead
+      // with the committed label. Excel-autofilter convention: re-opening the
+      // picker with a value already selected must let the user *switch* to a
+      // different value, not just see the value they already chose.
+      _scheduleSearch('', immediate: true);
+      // Select-all so the next keystroke replaces the committed label
+      // instead of appending to it.
+      if (_controller.text.isNotEmpty) {
+        _controller.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _controller.text.length,
+        );
+      }
     } else {
       // Delay so a tap inside the overlay registers before we tear it down.
       Future.delayed(const Duration(milliseconds: 150), () {
@@ -115,6 +169,7 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
         _candidates = results;
         _loading = false;
         _highlightedIndex = results.isEmpty ? -1 : 0;
+        _lastAppliedTerm = term;
       });
       _overlay?.markNeedsBuild();
     } catch (e) {
@@ -150,6 +205,11 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
           if (term.isNotEmpty) 'term': term,
           'page': 0,
           'size': 25,
+          // CF3.4.3 protocol additions — backend strips the picker's own
+          // column from userFilter and uses editorEntityId to resolve any
+          // Janino injectable's getEditorEntity() in the Inner DISTINCT.
+          if (widget.userFilter != null) 'userFilter': widget.userFilter,
+          if (widget.editorEntityId != null) 'editorEntityId': widget.editorEntityId,
         },
       },
       fetchPolicy: FetchPolicy.noCache,
@@ -254,9 +314,18 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
       );
     }
     if (_candidates.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(8),
-        child: Text('no results', style: TextStyle(fontSize: 12, color: Colors.grey)),
+      // Two distinct empty states (CF3.4.3 *Frontend UX*):
+      //   - cold (no typeahead term): the picker's row-restriction yielded
+      //     zero candidates — the user's *other* filters are too narrow.
+      //   - typeahead miss: the typed term didn't match any candidate in
+      //     the (already restricted) set.
+      final isRestrictionEmpty = _lastAppliedTerm.isEmpty;
+      final message = isRestrictionEmpty
+          ? 'No candidates match the current filters.'
+          : 'No matches for "$_lastAppliedTerm".';
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: Text(message, style: const TextStyle(fontSize: 12, color: Colors.grey)),
       );
     }
     return ListView.builder(

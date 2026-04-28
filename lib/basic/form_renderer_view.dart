@@ -1703,6 +1703,12 @@ class _GridFieldState extends State<_GridField> {
       onChanged: _onColumnFilterChanged,
       dataFormCode: widget.dataFormCode,
       elementCode: widget.elementCode,
+      // CF3.4.3 — pass user-filter tree, parent editor entity, and the
+      // dismiss trigger so the picker can run the inner DISTINCT correctly
+      // and close on other-column filter changes.
+      userFilter: _composeUserFilter(),
+      editorEntityId: widget.entityId,
+      dismissTrigger: _gridRebuildTrigger,
     );
   }
 

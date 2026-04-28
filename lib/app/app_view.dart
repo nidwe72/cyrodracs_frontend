@@ -483,6 +483,13 @@ class _AppViewState extends State<AppView> {
       debouncer: _filterDebouncer,
       onChanged: _onColumnFilterChanged,
       viewNodeCode: _selectedDef?.code,
+      // CF3.4.3 — pass the host's user-filter tree so the backend can strip
+      // the picker's own column and run the inner DISTINCT.
+      userFilter: _composeUserFilter(),
+      // ENTITY_LIST surfaces have no parent editor entity.
+      editorEntityId: null,
+      // Dismiss the picker overlay on any other-column filter change.
+      dismissTrigger: _gridRebuildTrigger,
     );
   }
 
