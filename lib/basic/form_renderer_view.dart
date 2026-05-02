@@ -1865,7 +1865,7 @@ class _GridFieldState extends State<_GridField> {
         document: gql(r'''
           query ColumnFilterMetadata($scope: ColumnFilterScopeInput!) {
             columnFilterMetadata(scope: $scope) {
-              columnKey filterType entityProviderRef entityRendererRef enumValues
+              columnKey filterType entityProviderRef entityRendererRef enumValues restrictByVisibleRows
             }
           }
         '''),
@@ -2049,6 +2049,9 @@ class _GridFieldState extends State<_GridField> {
       // the picker's candidate set in create-new mode. Computed once
       // per build, reused across all pickers on this GRID.
       pendingRowDirectValues: _pendingRowDirectValues(),
+      // CF3.4.6 — pending rows' direct ENUM field values augment the
+      // dropdown options in create-new mode.
+      pendingRowEnumValues: _pendingRowEnumValues(),
     );
   }
 
@@ -2076,6 +2079,32 @@ class _GridFieldState extends State<_GridField> {
       }
       if (ids.isNotEmpty) {
         result.add({'fieldName': key, 'ids': ids.toList()});
+      }
+    }
+    return result;
+  }
+
+  /// CF3.4.6 — collects, for each direct ENUM column on the row entity,
+  /// the constant names the pending rows carry at that field. Drops nulls,
+  /// dedupes locally. Returns an empty list when no pending rows or no
+  /// direct ENUM columns exist; the backend treats null/empty the same
+  /// way (no augmentation).
+  List<Map<String, dynamic>> _pendingRowEnumValues() {
+    if (widget.pendingRows.isEmpty) return const [];
+    final result = <Map<String, dynamic>>[];
+    for (final entry in _columnMeta.entries) {
+      final key = entry.key;
+      if (entry.value.filterType != ColumnFilterType.entityEnum) continue;
+      // Dot-path enum columns are not augmented by pending direct fields.
+      if (key.contains('.')) continue;
+      final values = <String>{};
+      for (final p in widget.pendingRows) {
+        final v = p.values[key];
+        if (v == null) continue;
+        values.add(v.toString());
+      }
+      if (values.isNotEmpty) {
+        result.add({'fieldName': key, 'values': values.toList()});
       }
     }
     return result;

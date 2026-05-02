@@ -35,12 +35,19 @@ class ColumnFilterMeta {
   final String? entityRendererRef;
   final List<String>? enumValues;
 
+  /// CF3.4.5 — surfaces the column's `restrictByVisibleRows` flag for the
+  /// admin editor checkbox. Defaults to true (matches backend default).
+  /// Runtime filter widgets do NOT read this — backend handles the flag
+  /// inside `enumValuesForColumn` / `entityRefPickerCandidates`.
+  final bool restrictByVisibleRows;
+
   ColumnFilterMeta({
     required this.columnKey,
     required this.filterType,
     this.entityProviderRef,
     this.entityRendererRef,
     this.enumValues,
+    this.restrictByVisibleRows = true,
   });
 
   factory ColumnFilterMeta.fromJson(Map<String, dynamic> json) {
@@ -50,6 +57,7 @@ class ColumnFilterMeta {
       entityProviderRef: json['entityProviderRef'] as String?,
       entityRendererRef: json['entityRendererRef'] as String?,
       enumValues: (json['enumValues'] as List<dynamic>?)?.cast<String>(),
+      restrictByVisibleRows: json['restrictByVisibleRows'] as bool? ?? true,
     );
   }
 }

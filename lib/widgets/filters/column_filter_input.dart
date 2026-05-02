@@ -36,6 +36,11 @@ import 'year_month_range_filter_input.dart';
 /// - [pendingRowDirectValues] — list of `{ fieldName, ids }` tuples carrying
 ///   pending rows' direct field values for picker candidate augmentation in
 ///   create-new mode. Null/empty → no augmentation (CF3.4.3 behaviour).
+///
+/// CF3.4.6 ENUM-augmentation param (ENUM only):
+/// - [pendingRowEnumValues] — list of `{ fieldName, values }` tuples carrying
+///   pending rows' direct ENUM field values for option augmentation in
+///   create-new mode. Null/empty → no augmentation.
 Widget? buildColumnFilterInput({
   required ColumnFilterMeta meta,
   required dynamic currentValue,
@@ -49,6 +54,7 @@ Widget? buildColumnFilterInput({
   int? editorEntityId,
   Listenable? dismissTrigger,
   List<Map<String, dynamic>>? pendingRowDirectValues,
+  List<Map<String, dynamic>>? pendingRowEnumValues,
 }) {
   switch (meta.filterType) {
     case ColumnFilterType.string:
@@ -70,10 +76,17 @@ Widget? buildColumnFilterInput({
         onChanged: (v) => onChanged(meta.columnKey, v),
       );
     case ColumnFilterType.entityEnum:
-      final values = meta.enumValues ?? const <String>[];
       return EnumFilterInput(
-        values: values,
+        columnKey: meta.columnKey,
+        staticEnumValues: meta.enumValues ?? const <String>[],
         value: currentValue is String ? currentValue : null,
+        viewNodeCode: viewNodeCode,
+        dataFormCode: dataFormCode,
+        elementCode: elementCode,
+        userFilter: userFilter,
+        editorEntityId: editorEntityId,
+        dismissTrigger: dismissTrigger,
+        pendingRowEnumValues: pendingRowEnumValues,
         onChanged: (v) => onChanged(meta.columnKey, v),
       );
     case ColumnFilterType.date:

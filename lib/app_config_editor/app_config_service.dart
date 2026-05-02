@@ -94,7 +94,7 @@ const _appConfigFields = r'''
         mandatory
         reloadOnChangeOf
         visibilityRule { expressionRef }
-        tableColumns { id code key header entityRendererRef }
+        tableColumns { id code key header entityRendererRef restrictByVisibleRows }
         addAction {
           id code targetDataFormRef childLabel
           contextBindings { id code target source }
@@ -121,13 +121,13 @@ const _appConfigFields = r'''
 
   fragment ViewNodeFields on ViewNode {
     id code type label entityProviderRef dataFormRef content
-    tableColumns { id code key header entityRendererRef }
+    tableColumns { id code key header entityRendererRef restrictByVisibleRows }
     children {
       id code type label entityProviderRef dataFormRef content
-      tableColumns { id code key header entityRendererRef }
+      tableColumns { id code key header entityRendererRef restrictByVisibleRows }
       children {
         id code type label entityProviderRef dataFormRef content
-        tableColumns { id code key header entityRendererRef }
+        tableColumns { id code key header entityRendererRef restrictByVisibleRows }
       }
     }
   }

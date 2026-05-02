@@ -45,6 +45,14 @@ class AppConfigNode {
   final String? viewContent;           // content identifier on STATIC_PAGE
   final int? viewContentNodeId;
 
+  // TableColumn / GridTableColumn — CF3.4.5 admin opt-out for the
+  // visible-rows restriction. Default true matches the backend default.
+  // restrictByVisibleRowsNodeId is currently always null because the
+  // backend SDL hides *NodeId suffix fields (see JavaSchemaGenerator);
+  // the save flow falls back to addNode each time.
+  final bool restrictByVisibleRows;
+  final int? restrictByVisibleRowsNodeId;
+
   // collection-node fields
   final String? childTypeCode; // typeCode of children, e.g. "DataForm"
   final int? parentId;         // DB id of the enclosing instance node
@@ -81,6 +89,8 @@ class AppConfigNode {
     this.dataFormRefNodeId,
     this.viewContent,
     this.viewContentNodeId,
+    this.restrictByVisibleRows = true,
+    this.restrictByVisibleRowsNodeId,
     this.childTypeCode,
     this.parentId,
   });
@@ -181,6 +191,7 @@ class AppConfigNode {
             viewNodeLabelNodeId: (c['headerNodeId'] as num?)?.toInt(),
             entityRendererRef: c['entityRendererRef'] as String?,
             entityRendererRefNodeId: (c['entityRendererRefNodeId'] as num?)?.toInt(),
+            restrictByVisibleRows: c['restrictByVisibleRows'] as bool? ?? true,
             children: const [],
           ));
         }
@@ -486,6 +497,7 @@ class AppConfigNode {
         viewNodeLabelNodeId: (c['headerNodeId'] as num?)?.toInt(),
         entityRendererRef: c['entityRendererRef'] as String?,
         entityRendererRefNodeId: (c['entityRendererRefNodeId'] as num?)?.toInt(),
+        restrictByVisibleRows: c['restrictByVisibleRows'] as bool? ?? true,
         children: const [],
       ));
     }

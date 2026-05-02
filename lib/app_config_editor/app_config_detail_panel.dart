@@ -131,6 +131,9 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   String _selectedViewNodeType = _kViewNodeTypes.first;
   String? _selectedDataFormRef;
   String? _selectedTableColRendererRef;
+  // CF3.4.5 — admin opt-out for the visible-rows restriction (TableColumn /
+  // GridTableColumn). Default true mirrors the backend.
+  bool _tableColRestrictByVisibleRows = true;
   // FilterNode state
   String _selectedFilterNodeType = _kFilterNodeTypes.first;
   String _selectedFilterOperator = _kFilterOperators.first;
@@ -195,6 +198,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _selectedViewNodeType = n?.typeValue ?? _kViewNodeTypes.first;
     _selectedDataFormRef = n?.dataFormRef;
     _selectedTableColRendererRef = n?.entityRendererRef;
+    _tableColRestrictByVisibleRows = n?.restrictByVisibleRows ?? true;
     _filterFieldCtrl = TextEditingController(text: n?.dataBinding ?? '');
     _filterValueCtrl = TextEditingController(text: n?.viewNodeLabel ?? '');
     _sortFieldCtrl = TextEditingController(text: n?.dataBinding ?? '');
@@ -623,6 +627,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             _tableColumnHeaderField(),
             const SizedBox(height: 12),
             _tableColumnRendererDropdown(),
+            const SizedBox(height: 8),
+            _tableColumnRestrictByVisibleRowsCheckbox(),
           ],
           if (isFilterNode) ...[
             const SizedBox(height: 12),
@@ -863,6 +869,9 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           isGrid ? 'GridTableColumnHeader' : 'TableColumnHeader';
       final String rendererRefTypeCode =
           isGrid ? 'GridTableColumnRendererRef' : 'TableColumnRendererRef';
+      final String restrictTypeCode = isGrid
+          ? 'GridTableColumnRestrictByVisibleRows'
+          : 'TableColumnRestrictByVisibleRows';
       await _run(() async {
         AppConfigNode? tree = await widget.service.addNode(
           parentObjectId: col.parentId,
@@ -909,6 +918,16 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
                 parentObjectId: colId,
                 typeCode: rendererRefTypeCode,
                 code: _selectedTableColRendererRef!,
+              );
+            }
+            // CF3.4.5 — only seed an explicit child when the user opted
+            // out (default true matches the field initialiser on
+            // TableColumn, so no node is needed when restrict==true).
+            if (!_tableColRestrictByVisibleRows) {
+              tree = await widget.service.addNode(
+                parentObjectId: colId,
+                typeCode: restrictTypeCode,
+                code: 'false',
               );
             }
           }
@@ -1068,6 +1087,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             _tableColumnHeaderField(),
             const SizedBox(height: 12),
             _tableColumnRendererDropdown(),
+            const SizedBox(height: 8),
+            _tableColumnRestrictByVisibleRowsCheckbox(),
           ],
           if (n.isFilterNode) ...[
             const SizedBox(height: 12),
@@ -1176,6 +1197,8 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && _tableColHeaderCtrl.text.trim() != (n.viewNodeLabel ?? '');
     final tableColRendererChanged = n.isAnyTableColumn
         && (_selectedTableColRendererRef ?? '') != (n.entityRendererRef ?? '');
+    final tableColRestrictChanged = n.isAnyTableColumn
+        && _tableColRestrictByVisibleRows != n.restrictByVisibleRows;
     // FilterNode-specific change detection
     final filterTypeChanged = n.isFilterNode
         && _selectedFilterNodeType != (n.typeValue ?? '');
@@ -1211,6 +1234,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && !viewLabelChanged && !viewNodeTypeChanged && !dataFormRefChanged
         && !viewProviderRefChanged && !viewContentChanged
         && !tableColKeyChanged && !tableColHeaderChanged && !tableColRendererChanged
+        && !tableColRestrictChanged
         && !filterTypeChanged && !filterFieldChanged && !filterOperatorChanged && !filterValueChanged
         && !sortFieldChanged && !sortDirectionChanged
         && !exprTypeChanged && !exprBaseClassChanged && !exprBodyChanged && !exprDescChanged
@@ -1385,6 +1409,9 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       final String rendererRefTypeCode = n.isGridTableColumn
           ? 'GridTableColumnRendererRef'
           : 'TableColumnRendererRef';
+      final String restrictTypeCode = n.isGridTableColumn
+          ? 'GridTableColumnRestrictByVisibleRows'
+          : 'TableColumnRestrictByVisibleRows';
       await _run(() async {
         AppConfigNode? tree;
         if (codeChanged) {
@@ -1419,6 +1446,23 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
           } else {
             tree = await widget.service.addNode(
               parentObjectId: n.id, typeCode: rendererRefTypeCode, code: _selectedTableColRendererRef!,
+            );
+          }
+        }
+        // CF3.4.5 — restrictByVisibleRows checkbox. The child node's
+        // 'code' carries 'true' / 'false'; backend reads it via
+        // Boolean.parseBoolean. NodeId is currently always null
+        // (SDL hides *NodeId), so each toggle creates a new child;
+        // last-write-wins on read inside AppConfigTreeBuilder.
+        if (tableColRestrictChanged) {
+          final restrictCode = _tableColRestrictByVisibleRows ? 'true' : 'false';
+          if (n.restrictByVisibleRowsNodeId != null) {
+            tree = await widget.service.updateNode(
+              n.restrictByVisibleRowsNodeId!, code: restrictCode);
+          } else {
+            tree = await widget.service.addNode(
+              parentObjectId: n.id, typeCode: restrictTypeCode,
+              code: restrictCode,
             );
           }
         }
@@ -2596,6 +2640,27 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       ),
       items: items,
       onChanged: (v) => setState(() => _selectedTableColRendererRef = v),
+    );
+  }
+
+  /// CF3.4.5 — admin opt-out for the visible-rows restriction. Default
+  /// true (mirrors backend). Affects ENUM dropdowns and ENTITY_REF
+  /// pickers; no effect for STRING / NUMBER / DATE / BOOLEAN.
+  Widget _tableColumnRestrictByVisibleRowsCheckbox() {
+    return CheckboxListTile(
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      dense: true,
+      title: const Text('Restrict filter options to visible rows'),
+      subtitle: const Text(
+        'When on, ENUM and ENTITY_REF filter inputs only show values '
+        'present in the rows that match the column\'s other filters. '
+        'No effect on STRING / NUMBER / DATE / BOOLEAN columns.',
+        style: TextStyle(fontSize: 11),
+      ),
+      value: _tableColRestrictByVisibleRows,
+      onChanged: (v) =>
+          setState(() => _tableColRestrictByVisibleRows = v ?? true),
     );
   }
 

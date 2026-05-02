@@ -267,7 +267,7 @@ class _AppViewState extends State<AppView> {
         document: gql(r'''
           query ColumnFilterMetadata($scope: ColumnFilterScopeInput!) {
             columnFilterMetadata(scope: $scope) {
-              columnKey filterType entityProviderRef entityRendererRef enumValues
+              columnKey filterType entityProviderRef entityRendererRef enumValues restrictByVisibleRows
             }
           }
         '''),
