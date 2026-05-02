@@ -115,8 +115,19 @@ class AppConfigNode {
   /// True for ViewNode nodes.
   bool get isViewNode => typeCode == 'ViewNode';
 
-  /// True for TableColumn nodes.
+  /// True for TableColumn nodes (children of ViewNode.tableColumns).
   bool get isTableColumn => typeCode == 'TableColumn';
+
+  /// True for GridTableColumn nodes (children of DataFormElement.tableColumns
+  /// when the element is a GRID). Functionally identical to TableColumn — both
+  /// store key/header/rendererRef — but lives under a different parent type
+  /// so the AppConfig type system distinguishes them. The admin editor renders
+  /// them with the same UI per columnFilters.md CF3.6.
+  bool get isGridTableColumn => typeCode == 'GridTableColumn';
+
+  /// True for either TableColumn or GridTableColumn — used by the admin
+  /// editor's render and save paths that treat the two uniformly.
+  bool get isAnyTableColumn => isTableColumn || isGridTableColumn;
 
   /// True for Expression nodes.
   bool get isExpression => typeCode == 'Expression';

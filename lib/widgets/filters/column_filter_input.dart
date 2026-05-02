@@ -31,6 +31,11 @@ import 'year_month_range_filter_input.dart';
 /// - [dismissTrigger] — a [Listenable] that fires whenever any column filter
 ///   changes; the picker overlay closes on each tick to avoid showing stale
 ///   candidates relative to the now-changed `otherUserFilters`.
+///
+/// CF3.4.4 picker-augmentation param (ENTITY_REF only):
+/// - [pendingRowDirectValues] — list of `{ fieldName, ids }` tuples carrying
+///   pending rows' direct field values for picker candidate augmentation in
+///   create-new mode. Null/empty → no augmentation (CF3.4.3 behaviour).
 Widget? buildColumnFilterInput({
   required ColumnFilterMeta meta,
   required dynamic currentValue,
@@ -43,6 +48,7 @@ Widget? buildColumnFilterInput({
   Map<String, dynamic>? userFilter,
   int? editorEntityId,
   Listenable? dismissTrigger,
+  List<Map<String, dynamic>>? pendingRowDirectValues,
 }) {
   switch (meta.filterType) {
     case ColumnFilterType.string:
@@ -103,6 +109,7 @@ Widget? buildColumnFilterInput({
         userFilter: userFilter,
         editorEntityId: editorEntityId,
         dismissTrigger: dismissTrigger,
+        pendingRowDirectValues: pendingRowDirectValues,
         onChanged: (v) => onChanged(meta.columnKey, v),
       );
     case ColumnFilterType.unsupported:

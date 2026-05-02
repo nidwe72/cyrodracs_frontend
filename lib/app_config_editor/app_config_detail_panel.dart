@@ -207,11 +207,12 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     _parentEntityType = _findParentEntityType();
     final shouldFetchCompletions = _parentEntityType != null && n != null
         && (n.hasDataBindingField
-            || n.isTableColumn
+            || n.isAnyTableColumn          // TableColumn or GridTableColumn — CF3.6
             || n.isFilterNode
             || n.isSortField
             || (n.isCollection && n.childTypeCode == 'DataFormElement')
             || (n.isCollection && n.childTypeCode == 'TableColumn')
+            || (n.isCollection && n.childTypeCode == 'GridTableColumn')
             || (n.isCollection && n.childTypeCode == 'FilterNode')
             || (n.isCollection && n.childTypeCode == 'SortField'));
     if (shouldFetchCompletions) {
@@ -273,8 +274,15 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       }
     }
 
-    // ViewNode-based: TableColumn or "tableColumns" collection
+    // ViewNode-based: TableColumn or "tableColumns" collection under a ViewNode
     String? providerRef = _findParentViewNodeProviderRef();
+    if (providerRef != null) {
+      return _resolveProviderEntityType(providerRef);
+    }
+
+    // GRID-based: GridTableColumn or "tableColumns" collection under a GRID
+    // DataFormElement (per columnFilters.md CF3.6's GridTableColumn parity).
+    providerRef = _findParentGridProviderRef();
     if (providerRef != null) {
       return _resolveProviderEntityType(providerRef);
     }
@@ -383,6 +391,36 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
       if (child.isCollection && child.label == 'entityProviders') {
         for (final prov in child.children) {
           if (prov.label == providerCode) return prov.entityValue;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// CF3.6 — walks DataForm.elements looking for a GRID DataFormElement
+  /// that owns this GridTableColumn or its parent tableColumns collection.
+  /// Returns the GRID's entityProviderRef value, or null if not found.
+  String? _findParentGridProviderRef() {
+    final n = widget.node;
+    final root = widget.root;
+    if (n == null || root == null) return null;
+
+    for (final dataForms in root.children) {
+      if (!dataForms.isCollection || dataForms.label != 'dataForms') continue;
+      for (final form in dataForms.children) {
+        for (final elements in form.children) {
+          if (!elements.isCollection || elements.label != 'elements') continue;
+          for (final elem in elements.children) {
+            for (final tc in elem.children) {
+              if (!tc.isCollection || tc.label != 'tableColumns') continue;
+              // Is this node the tableColumns collection under a GRID?
+              if (n.id == tc.id) return elem.entityProviderRef;
+              // Or is this node a GridTableColumn directly under it?
+              for (final col in tc.children) {
+                if (col.id == n.id) return elem.entityProviderRef;
+              }
+            }
+          }
         }
       }
     }
@@ -519,7 +557,13 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     final isProvider = col.childTypeCode == 'EntityProvider';
     final isRenderer = col.childTypeCode == 'EntityRenderer';
     final isViewNode = col.childTypeCode == 'ViewNode';
-    final isTableColumn = col.childTypeCode == 'TableColumn';
+    // GridTableColumn lives under DataFormElement.tableColumns (typeCode
+    // 'GridTableColumn'); TableColumn lives under ViewNode.tableColumns
+    // (typeCode 'TableColumn'). Same UI, same fields — different typeCodes
+    // for the saved children. Per columnFilters.md CF3.6.
+    final isTableColumn = col.childTypeCode == 'TableColumn'
+        || col.childTypeCode == 'GridTableColumn';
+    final isGridTableColumn = col.childTypeCode == 'GridTableColumn';
     final isFilterNode = col.childTypeCode == 'FilterNode';
     final isSortField = col.childTypeCode == 'SortField';
     final showBinding = isElement && _parentEntityType != null;
@@ -535,7 +579,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
     } else if (isViewNode) {
       title = 'Add ViewNode';
     } else if (isTableColumn) {
-      title = 'Add TableColumn';
+      title = isGridTableColumn ? 'Add GridTableColumn' : 'Add TableColumn';
     } else if (isFilterNode) {
       title = 'Add Filter Condition';
     } else if (isSortField) {
@@ -806,19 +850,30 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         }
         return tree;
       });
-    } else if (col.childTypeCode == 'TableColumn') {
+    } else if (col.childTypeCode == 'TableColumn'
+        || col.childTypeCode == 'GridTableColumn') {
+      // Same Add flow for both TableColumn (under ViewNode) and
+      // GridTableColumn (under DataFormElement). The parent's collection
+      // childTypeCode determines which child typeCodes to use for
+      // key/header/rendererRef. Per columnFilters.md CF3.6.
+      final bool isGrid = col.childTypeCode == 'GridTableColumn';
+      final String columnTypeCode = isGrid ? 'GridTableColumn' : 'TableColumn';
+      final String keyTypeCode = isGrid ? 'GridTableColumnKey' : 'TableColumnKey';
+      final String headerTypeCode =
+          isGrid ? 'GridTableColumnHeader' : 'TableColumnHeader';
+      final String rendererRefTypeCode =
+          isGrid ? 'GridTableColumnRendererRef' : 'TableColumnRendererRef';
       await _run(() async {
         AppConfigNode? tree = await widget.service.addNode(
           parentObjectId: col.parentId,
-          typeCode: 'TableColumn',
+          typeCode: columnTypeCode,
           code: code,
         );
         // Find the new column to add key/header children
         tree = await widget.service.fetchTree();
-        // For simplicity, use fetchTree + search to find the new column's ID
-        // The column is a child of the ViewNode (col.parentId)
         if (tree != null) {
-          // Re-fetch to get the ID — search all ViewNodes for tableColumns
+          // Re-fetch to get the ID — search all tableColumns collections
+          // for one whose new child matches.
           int? colId;
           void searchColumns(List<AppConfigNode> nodes) {
             for (final n in nodes) {
@@ -837,7 +892,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             if (key.isNotEmpty) {
               tree = await widget.service.addNode(
                 parentObjectId: colId,
-                typeCode: 'TableColumnKey',
+                typeCode: keyTypeCode,
                 code: key,
               );
             }
@@ -845,14 +900,14 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             if (header.isNotEmpty) {
               tree = await widget.service.addNode(
                 parentObjectId: colId,
-                typeCode: 'TableColumnHeader',
+                typeCode: headerTypeCode,
                 code: header,
               );
             }
             if (_selectedTableColRendererRef != null && _selectedTableColRendererRef!.isNotEmpty) {
               tree = await widget.service.addNode(
                 parentObjectId: colId,
-                typeCode: 'TableColumnRendererRef',
+                typeCode: rendererRefTypeCode,
                 code: _selectedTableColRendererRef!,
               );
             }
@@ -1006,7 +1061,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
               _contentField(),
             ],
           ],
-          if (n.isTableColumn) ...[
+          if (n.isAnyTableColumn) ...[
             const SizedBox(height: 12),
             _tableColumnKeyField(),
             const SizedBox(height: 12),
@@ -1113,12 +1168,13 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         && (_selectedEntityProviderRef ?? '') != (n.entityProviderRef ?? '');
     final viewContentChanged = n.isViewNode
         && _viewContentCtrl.text.trim() != (n.viewContent ?? '');
-    // TableColumn-specific change detection
-    final tableColKeyChanged = n.isTableColumn
+    // TableColumn / GridTableColumn-specific change detection (CF3.6 — same
+    // editor for both variants).
+    final tableColKeyChanged = n.isAnyTableColumn
         && _tableColKeyCtrl.text.trim() != (n.dataBinding ?? '');
-    final tableColHeaderChanged = n.isTableColumn
+    final tableColHeaderChanged = n.isAnyTableColumn
         && _tableColHeaderCtrl.text.trim() != (n.viewNodeLabel ?? '');
-    final tableColRendererChanged = n.isTableColumn
+    final tableColRendererChanged = n.isAnyTableColumn
         && (_selectedTableColRendererRef ?? '') != (n.entityRendererRef ?? '');
     // FilterNode-specific change detection
     final filterTypeChanged = n.isFilterNode
@@ -1317,7 +1373,18 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
         }
         return tree;
       });
-    } else if (n.isTableColumn) {
+    } else if (n.isAnyTableColumn) {
+      // Same save flow for TableColumn (under ViewNode) and
+      // GridTableColumn (under DataFormElement). The parent's typeCode
+      // determines which child typeCodes the new key/header/rendererRef
+      // nodes should carry. Per columnFilters.md CF3.6.
+      final String keyTypeCode =
+          n.isGridTableColumn ? 'GridTableColumnKey' : 'TableColumnKey';
+      final String headerTypeCode =
+          n.isGridTableColumn ? 'GridTableColumnHeader' : 'TableColumnHeader';
+      final String rendererRefTypeCode = n.isGridTableColumn
+          ? 'GridTableColumnRendererRef'
+          : 'TableColumnRendererRef';
       await _run(() async {
         AppConfigNode? tree;
         if (codeChanged) {
@@ -1330,7 +1397,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             tree = await widget.service.updateNode(n.dataBindingNodeId!, code: keyText);
           } else {
             tree = await widget.service.addNode(
-              parentObjectId: n.id, typeCode: 'TableColumnKey', code: keyText,
+              parentObjectId: n.id, typeCode: keyTypeCode, code: keyText,
             );
           }
         }
@@ -1341,7 +1408,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             tree = await widget.service.updateNode(n.viewNodeLabelNodeId!, code: headerText);
           } else {
             tree = await widget.service.addNode(
-              parentObjectId: n.id, typeCode: 'TableColumnHeader', code: headerText,
+              parentObjectId: n.id, typeCode: headerTypeCode, code: headerText,
             );
           }
         }
@@ -1351,7 +1418,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             tree = await widget.service.updateNode(n.entityRendererRefNodeId!, code: _selectedTableColRendererRef!);
           } else {
             tree = await widget.service.addNode(
-              parentObjectId: n.id, typeCode: 'TableColumnRendererRef', code: _selectedTableColRendererRef!,
+              parentObjectId: n.id, typeCode: rendererRefTypeCode, code: _selectedTableColRendererRef!,
             );
           }
         }
@@ -2291,25 +2358,62 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
   // TableColumn-specific fields
   // ---------------------------------------------------------------------------
 
+  /// CF3.6 — extracts the prefix (everything before the last dot) from the
+  /// TableColumn key field. Mirrors `_filterFieldPrefix` for FilterNode keys.
+  /// E.g., "producer.name" → "producer", "producer." → "producer", "name" → "".
+  String _tableColKeyPrefix() {
+    final text = _tableColKeyCtrl.text;
+    final lastDot = text.lastIndexOf('.');
+    if (lastDot < 0) return '';
+    return text.substring(0, lastDot);
+  }
+
+  /// Last segment (everything after the last dot) — what the proposal list
+  /// filters against per CF3.6's dot-path-accumulating completion.
+  String _tableColKeyLastSegment() {
+    final text = _tableColKeyCtrl.text;
+    final lastDot = text.lastIndexOf('.');
+    if (lastDot < 0) return text;
+    return text.substring(lastDot + 1);
+  }
+
   List<BindingCompletion> _filteredTableColKeyCompletions() {
-    final filter = _tableColKeyCtrl.text.toLowerCase();
+    final lastSegment = _tableColKeyLastSegment().toLowerCase();
     return _completions.where((c) {
-      if (filter.isEmpty) return true;
+      if (lastSegment.isEmpty) return true;
       final getterName =
           'get${c.segment[0].toUpperCase()}${c.segment.substring(1)}';
-      return c.segment.toLowerCase().contains(filter) ||
-          getterName.toLowerCase().contains(filter);
+      return c.segment.toLowerCase().contains(lastSegment) ||
+          getterName.toLowerCase().contains(lastSegment);
     }).toList();
   }
 
+  /// CF3.6 — dot-path-accumulating accept. Leaf segments commit the full
+  /// dot-path (`prefix.segment`); non-leaf relationship segments append
+  /// `prefix.segment.` and re-fetch the next level's completions so the
+  /// user can keep navigating.
   void _acceptTableColKeyCompletion(BindingCompletion c) {
-    _tableColKeyCtrl.text = c.segment;
-    _tableColKeyCtrl.selection = TextSelection.collapsed(
-        offset: _tableColKeyCtrl.text.length);
-    setState(() {
-      _showTableColKeyCompletions = false;
-      _tableColKeyCompletionIndex = -1;
-    });
+    final prefix = _tableColKeyPrefix();
+    if (c.leaf) {
+      final fullPath = prefix.isEmpty ? c.segment : '$prefix.${c.segment}';
+      _tableColKeyCtrl.text = fullPath;
+      _tableColKeyCtrl.selection = TextSelection.collapsed(
+          offset: _tableColKeyCtrl.text.length);
+      setState(() {
+        _showTableColKeyCompletions = false;
+        _tableColKeyCompletionIndex = -1;
+      });
+    } else {
+      // Relationship segment — append `.`, fetch the next level.
+      final newPrefix = prefix.isEmpty ? c.segment : '$prefix.${c.segment}';
+      _tableColKeyCtrl.text = '$newPrefix.';
+      _tableColKeyCtrl.selection = TextSelection.collapsed(
+          offset: _tableColKeyCtrl.text.length);
+      setState(() {
+        _tableColKeyCompletionIndex = -1;
+      });
+      _fetchCompletions(prefix: newPrefix);
+    }
   }
 
   KeyEventResult _onTableColKeyKey(FocusNode _, KeyEvent event) {
@@ -2365,7 +2469,7 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
             controller: _tableColKeyCtrl,
             focusNode: _tableColKeyFocus,
             decoration: InputDecoration(
-              labelText: 'Key (entity attribute)',
+              labelText: 'Key (entity attribute, dot-path)',
 
               isDense: true,
               prefixText: hasCompletions ? '$entityLabel.' : null,
@@ -2373,6 +2477,15 @@ class _AppConfigDetailPanelState extends State<AppConfigDetailPanel> {
                   color: Colors.grey, fontWeight: FontWeight.w500),
             ),
             onChanged: (value) {
+              // CF3.6 — re-fetch completions whenever the prefix segment
+              // changes (user typed `.` or modified text before the last
+              // dot). Mirrors the FilterField dot-path completion.
+              final lastDot = value.lastIndexOf('.');
+              if (lastDot >= 0) {
+                _fetchCompletions(prefix: value.substring(0, lastDot));
+              } else {
+                _fetchCompletions();
+              }
               setState(() {
                 _showTableColKeyCompletions = true;
                 _tableColKeyCompletionIndex = -1;

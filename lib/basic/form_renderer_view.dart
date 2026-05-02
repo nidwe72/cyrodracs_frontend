@@ -1441,6 +1441,15 @@ class _GridFieldState extends State<_GridField> {
   int _gridGeneration = 0;
   final GridRebuildTrigger _gridRebuildTrigger = GridRebuildTrigger();
 
+  // G7.8 — Pending-row dot-path resolution cache. Keyed by
+  // pendingRowIndex → columnKey → leafId / display string. Populated lazily
+  // when new pending rows appear (didUpdateWidget); dropped when pending
+  // rows are removed. Filter / sort / display read via _effectiveValue and
+  // _effectiveDisplay helpers.
+  final Map<int, Map<String, dynamic>> _pendingDotPathValues = {};
+  final Map<int, Map<String, String>> _pendingDotPathDisplays = {};
+  int _dotPathFetchSeq = 0;
+
   @override
   void dispose() {
     for (final c in _filterControllers.values) {
@@ -1457,21 +1466,30 @@ class _GridFieldState extends State<_GridField> {
   /// the first cell of the first row, remove icon instead of edit/delete).
   ///
   /// Pending rows are subject to the same column-filter predicates as
-  /// committed rows, evaluated client-side per columnFilters.md CF1.5.1.
-  /// The original index is preserved on each surviving row so the
-  /// "remove pending" action keeps targeting the right entry.
+  /// committed rows, evaluated client-side per columnFilters.md CF1.5.1,
+  /// and reordered by the active sort per CF2.5. Dot-path column values
+  /// (e.g. `cameraLensMount.producer`) come from the G7.8 resolution
+  /// cache populated lazily on pending-row addition. The original index
+  /// is preserved on each surviving row so the "remove pending" action
+  /// keeps targeting the right entry — `MapEntry.key` carries it
+  /// through both filter and sort steps.
   List<TrinaRow> _buildPendingTrinaRows() {
     final fieldKeys = widget.tableColumns.map((c) => c.key).toList();
-    return widget.pendingRows
+    final filtered = widget.pendingRows
         .asMap()
         .entries
-        .where((entry) => _pendingMatchesFilters(entry.value))
-        .map((entry) {
+        .where((entry) => _pendingMatchesFilters(entry.key, entry.value))
+        .toList();
+    final cmp = _comparatorForActiveSort();
+    if (cmp != null) {
+      filtered.sort(cmp);
+    }
+    return filtered.map((entry) {
       final i = entry.key;
       final pending = entry.value;
       final entityForRow = <String, dynamic>{};
       for (final key in fieldKeys) {
-        entityForRow[key] = pending.displayValues[key] ?? pending.values[key];
+        entityForRow[key] = _effectiveDisplay(i, pending, key);
       }
       return buildTrinaRow(
         entity: entityForRow,
@@ -1481,17 +1499,191 @@ class _GridFieldState extends State<_GridField> {
     }).toList();
   }
 
+  /// G7.8 — effective value for filter / sort: cached dot-path
+  /// resolution if `columnKey` is a dot-path, else the direct field
+  /// value from `pending.values`. Returns null when the cache hasn't
+  /// resolved yet OR the row legitimately has no value at this key.
+  dynamic _effectiveValue(int pendingIndex, PendingChild pending, String columnKey) {
+    if (columnKey.contains('.')) {
+      return _pendingDotPathValues[pendingIndex]?[columnKey];
+    }
+    return pending.values[columnKey];
+  }
+
+  /// G7.8 — effective display string for cell rendering: cached
+  /// dot-path display if `columnKey` is a dot-path, else
+  /// `pending.displayValues[k] ?? pending.values[k]` (direct columns
+  /// already have a display string captured at child-editor save time).
+  dynamic _effectiveDisplay(int pendingIndex, PendingChild pending, String columnKey) {
+    if (columnKey.contains('.')) {
+      return _pendingDotPathDisplays[pendingIndex]?[columnKey];
+    }
+    return pending.displayValues[columnKey] ?? pending.values[columnKey];
+  }
+
+  /// CF2.5 — Comparator for the currently-active sort column / direction,
+  /// or null when no sort is active (rows render in insertion order).
+  /// Null cell values land last under ASC, first under DESC per CF2.5.2.
+  /// Dot-path column values come from the G7.8 resolution cache via
+  /// [_effectiveValue]; the comparator therefore takes
+  /// `MapEntry<int, PendingChild>` so it has both the index (for cache
+  /// lookup) and the row.
+  Comparator<MapEntry<int, PendingChild>>? _comparatorForActiveSort() {
+    final colKey = _sortColumnKey;
+    final dir = _sortDirection;
+    if (colKey == null || dir == null) return null;
+    final meta = _columnMeta[colKey];
+    if (meta == null) return null;
+    final ascending = dir == SortDirection.asc;
+    return (a, b) {
+      final va = _effectiveValue(a.key, a.value, colKey);
+      final vb = _effectiveValue(b.key, b.value, colKey);
+      if (va == null && vb == null) return 0;
+      if (va == null) return ascending ? 1 : -1;
+      if (vb == null) return ascending ? -1 : 1;
+      final base = _compareNonNull(va, vb, meta.filterType);
+      return ascending ? base : -base;
+    };
+  }
+
+  /// G7.8 — fetches dot-path resolutions for the given pending rows.
+  /// One batched POST that covers all (pendingRowIndex × dot-path column)
+  /// combinations. Cache is updated on response; out-of-date responses
+  /// (sequence-number stale) are silently discarded.
+  Future<void> _fetchDotPathResolutionsForPending(List<int> pendingIndices) async {
+    if (pendingIndices.isEmpty) return;
+    if (widget.dataFormCode.isEmpty || widget.elementCode.isEmpty) return;
+
+    // Identify the dot-path columns we need to resolve. We only resolve
+    // columns whose key contains a dot — direct-column display values are
+    // already captured at child-editor save time.
+    final dotPathColumns = <Map<String, dynamic>>[];
+    for (final col in widget.tableColumns) {
+      if (!col.key.contains('.')) continue;
+      dotPathColumns.add({
+        'columnKey': col.key,
+        if (col.entityRendererRef != null) 'rendererRef': col.entityRendererRef,
+      });
+    }
+    if (dotPathColumns.isEmpty) return;
+
+    // Build directValues from the requested pending rows. For each row,
+    // include all direct-field entries with non-null IDs. The backend uses
+    // the column's first-segment to pick the right entry.
+    final directValues = <Map<String, dynamic>>[];
+    for (final i in pendingIndices) {
+      if (i >= widget.pendingRows.length) continue;
+      final p = widget.pendingRows[i];
+      for (final entry in p.values.entries) {
+        if (entry.key.contains('.')) continue;        // skip dot-path keys
+        final v = entry.value;
+        if (v == null) continue;
+        final n = v is num ? v.toInt() : int.tryParse(v.toString());
+        if (n == null) continue;
+        directValues.add({
+          'pendingRowIndex': i,
+          'fieldName': entry.key,
+          'id': n,
+        });
+      }
+    }
+    if (directValues.isEmpty) return;
+
+    final mySeq = ++_dotPathFetchSeq;
+    try {
+      final result = await graphqlClient.query(QueryOptions(
+        document: gql(r'''
+          query ResolveDotPathValues($input: ResolveDotPathValuesInput!) {
+            resolveDotPathValues(input: $input) {
+              pendingRowIndex columnKey leafId displayValue
+            }
+          }
+        '''),
+        variables: {
+          'input': {
+            'dataFormCode': widget.dataFormCode,
+            'elementCode': widget.elementCode,
+            'directValues': directValues,
+            'dotPathColumns': dotPathColumns,
+          },
+        },
+        fetchPolicy: FetchPolicy.noCache,
+      ));
+      if (mySeq != _dotPathFetchSeq || !mounted) return;
+      if (result.hasException) {
+        debugPrint('[G7.8] resolveDotPathValues failed: ${result.exception}');
+        return;
+      }
+      final entries = (result.data!['resolveDotPathValues'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      setState(() {
+        for (final e in entries) {
+          final idx = (e['pendingRowIndex'] as num).toInt();
+          final colKey = e['columnKey'] as String;
+          final leafId = e['leafId'];
+          final display = e['displayValue'] as String?;
+          _pendingDotPathValues.putIfAbsent(idx, () => {})[colKey] =
+              leafId is num ? leafId.toInt() : leafId;
+          if (display != null) {
+            _pendingDotPathDisplays.putIfAbsent(idx, () => {})[colKey] = display;
+          }
+        }
+        _gridGeneration++;     // remount TrinaGrid with newly-populated cells
+      });
+    } catch (e, st) {
+      debugPrint('[G7.8] resolveDotPathValues error: $e\n$st');
+    }
+  }
+
+  /// CF2.5.1 — per-type comparator on non-null cell values, mirroring
+  /// the server's ORDER BY semantics for each ColumnFilterType.
+  static int _compareNonNull(
+      dynamic va, dynamic vb, ColumnFilterType type) {
+    switch (type) {
+      case ColumnFilterType.string:
+        return va
+            .toString()
+            .toLowerCase()
+            .compareTo(vb.toString().toLowerCase());
+      case ColumnFilterType.number:
+      case ColumnFilterType.entityRef:
+        final na = va is num ? va : num.tryParse(va.toString()) ?? 0;
+        final nb = vb is num ? vb : num.tryParse(vb.toString()) ?? 0;
+        return na.compareTo(nb);
+      case ColumnFilterType.date:
+      case ColumnFilterType.yearMonth:
+      case ColumnFilterType.datetime:
+        // ISO date / yearMonth strings sort lexicographically; same trick
+        // the backend's ORDER BY relies on for these column types.
+        return va.toString().compareTo(vb.toString());
+      case ColumnFilterType.boolean:
+        final ba = va is bool
+            ? va
+            : va.toString().toLowerCase() == 'true';
+        final bb = vb is bool
+            ? vb
+            : vb.toString().toLowerCase() == 'true';
+        if (ba == bb) return 0;
+        return ba ? 1 : -1;          // false < true
+      case ColumnFilterType.entityEnum:
+        return va.toString().compareTo(vb.toString());
+      default:
+        return 0;
+    }
+  }
+
   /// True iff the pending row passes every active column filter,
   /// matching server-side predicate semantics (columnFilters.md CF1.5.1).
   /// Missing values fail the predicate (mirrors SQL's NULL-LIKE-anything
-  /// → UNKNOWN → false).
-  bool _pendingMatchesFilters(PendingChild pending) {
+  /// → UNKNOWN → false). Dot-path column values come from the G7.8
+  /// resolution cache via [_effectiveValue].
+  bool _pendingMatchesFilters(int pendingIndex, PendingChild pending) {
     for (final entry in _columnFilters.entries) {
       final key = entry.key;
       final filterValue = entry.value;
       final meta = _columnMeta[key];
       if (meta == null) continue;
-      final cellValue = pending.values[key];
+      final cellValue = _effectiveValue(pendingIndex, pending, key);
       if (!_cellMatchesFilter(cellValue, filterValue, meta.filterType)) {
         return false;
       }
@@ -1625,6 +1817,14 @@ class _GridFieldState extends State<_GridField> {
     if (widget.entityId != null) {
       _fetchData();
     }
+    // G7.8 — resolve dot-paths for any pending rows already present at
+    // mount time (rare but possible: navigating away from the GRID and
+    // back while the parent is still unsaved would re-mount with pending
+    // rows already in widget.pendingRows).
+    if (widget.pendingRows.isNotEmpty) {
+      _fetchDotPathResolutionsForPending(
+          [for (int i = 0; i < widget.pendingRows.length; i++) i]);
+    }
   }
 
   @override
@@ -1632,9 +1832,30 @@ class _GridFieldState extends State<_GridField> {
     super.didUpdateWidget(oldWidget);
     // Pending rows are owned by the parent; when its list grows or shrinks
     // (Add / Remove pending), bump the generation so the keyed TrinaGrid
-    // remounts with the fresh row set.
-    if (widget.pendingRows.length != oldWidget.pendingRows.length) {
+    // remounts with the fresh row set, AND fire the rebuild trigger so any
+    // open ENTITY_REF picker dismisses (CF3.4.4 *Open-picker invalidation*
+    // — pending list mutation changes the candidate set).
+    final oldLen = oldWidget.pendingRows.length;
+    final newLen = widget.pendingRows.length;
+    if (oldLen != newLen) {
       setState(() => _gridGeneration++);
+      _gridRebuildTrigger.bump();
+      // G7.8 — handle the cache for added vs removed indices.
+      if (newLen > oldLen) {
+        // New pending rows appeared at the end (the typical case — child
+        // editor save appends). Fetch dot-path resolutions for them.
+        final newIndices = [for (int i = oldLen; i < newLen; i++) i];
+        _fetchDotPathResolutionsForPending(newIndices);
+      } else {
+        // Pending row(s) removed — drop cache entries beyond the new length.
+        // Indices for surviving rows stay valid (removal happens at the end
+        // in current behaviour; if mid-list removal becomes possible, this
+        // logic would need reconsidering).
+        for (int i = newLen; i < oldLen; i++) {
+          _pendingDotPathValues.remove(i);
+          _pendingDotPathDisplays.remove(i);
+        }
+      }
     }
   }
 
@@ -1824,7 +2045,40 @@ class _GridFieldState extends State<_GridField> {
       userFilter: _composeUserFilter(),
       editorEntityId: widget.entityId,
       dismissTrigger: _gridRebuildTrigger,
+      // CF3.4.4 — pending rows' direct ENTITY_REF field values augment
+      // the picker's candidate set in create-new mode. Computed once
+      // per build, reused across all pickers on this GRID.
+      pendingRowDirectValues: _pendingRowDirectValues(),
     );
+  }
+
+  /// CF3.4.4 — collects, for each direct ENTITY_REF column on the row
+  /// entity, the IDs the pending rows reference at that field. Drops
+  /// nulls, dedupes locally. Returns an empty list when no pending rows
+  /// or no direct ENTITY_REF columns exist; the picker treats null/empty
+  /// the same way (no augmentation).
+  List<Map<String, dynamic>> _pendingRowDirectValues() {
+    if (widget.pendingRows.isEmpty) return const [];
+    final result = <Map<String, dynamic>>[];
+    for (final entry in _columnMeta.entries) {
+      final key = entry.key;
+      if (entry.value.filterType != ColumnFilterType.entityRef) continue;
+      // Dot-path column keys are handled by the backend (it walks the
+      // remainder over the first-segment target type) — we only send
+      // direct field values here.
+      if (key.contains('.')) continue;
+      final ids = <int>{};
+      for (final p in widget.pendingRows) {
+        final v = p.values[key];
+        if (v == null) continue;
+        final n = v is num ? v.toInt() : int.tryParse(v.toString());
+        if (n != null) ids.add(n);
+      }
+      if (ids.isNotEmpty) {
+        result.add({'fieldName': key, 'ids': ids.toList()});
+      }
+    }
+    return result;
   }
 
   bool get _anyColumnFilterable {

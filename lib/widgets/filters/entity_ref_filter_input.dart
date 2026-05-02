@@ -21,6 +21,7 @@ class EntityRefFilterInput extends StatefulWidget {
     this.userFilter,
     this.editorEntityId,
     this.dismissTrigger,
+    this.pendingRowDirectValues,
   });
 
   /// `{ id: int, label: String }` when a candidate is selected, else null.
@@ -39,10 +40,16 @@ class EntityRefFilterInput extends StatefulWidget {
   /// ENTITY_LIST surfaces.
   final int? editorEntityId;
 
-  /// Fires whenever any column filter on the host changes. The picker
-  /// overlay closes on each tick — `otherUserFilters` would otherwise have
-  /// shifted under it (CF3.4.3 *Recomputation and invalidation*).
+  /// Fires whenever any column filter on the host changes — OR whenever the
+  /// host's pending-row list mutates (CF3.4.4 *Open-picker invalidation*).
+  /// The picker overlay closes on each tick to avoid showing a stale
+  /// candidate set.
   final Listenable? dismissTrigger;
+
+  /// CF3.4.4 — list of `{ fieldName: String, ids: [Int!] }` tuples carrying
+  /// pending rows' direct field values for picker candidate augmentation in
+  /// create-new mode. Null/empty → no augmentation (CF3.4.3 behaviour).
+  final List<Map<String, dynamic>>? pendingRowDirectValues;
 
   final void Function(Map<String, dynamic>? value) onChanged;
 
@@ -210,6 +217,12 @@ class _EntityRefFilterInputState extends State<EntityRefFilterInput> {
           // Janino injectable's getEditorEntity() in the Inner DISTINCT.
           if (widget.userFilter != null) 'userFilter': widget.userFilter,
           if (widget.editorEntityId != null) 'editorEntityId': widget.editorEntityId,
+          // CF3.4.4 — pending rows' direct field values, for create-new
+          // mode picker candidate augmentation. Null/empty → no
+          // augmentation (CF3.4.3 behaviour).
+          if (widget.pendingRowDirectValues != null &&
+              widget.pendingRowDirectValues!.isNotEmpty)
+            'pendingRowDirectValues': widget.pendingRowDirectValues,
         },
       },
       fetchPolicy: FetchPolicy.noCache,
