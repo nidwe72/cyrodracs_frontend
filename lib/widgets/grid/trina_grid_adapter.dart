@@ -3,6 +3,27 @@ import 'package:trina_grid/trina_grid.dart';
 import '../../theme/app_theme.dart';
 import 'column_sort.dart' show SortDirection;
 import 'trina_grid_header.dart';
+import 'trina_grid_theme.dart' show kTrinaRowHeight;
+
+/// Computes the bounded pixel height for an embedded GRID's TrinaGrid host
+/// per gridElement.md G1.6.8 — sum of header height plus
+/// `rowCount × rowHeight`. When `rowCount == 0` we reserve one row's worth
+/// of height for the empty-state widget (TrinaGrid renders its
+/// `noRowsWidget` inside the bounded area).
+///
+/// `rowCount` MUST be the count of effective rows on screen
+/// (committed plus pending — see `_effectiveRows()` in
+/// `form_renderer_view.dart`). The "+1 for empty state" convention keeps
+/// the no-rows message visible without hardcoding a separate empty
+/// height.
+double computeGridBodyHeight({
+  required int rowCount,
+  required double headerHeight,
+  double rowHeight = kTrinaRowHeight,
+}) {
+  final dataRows = rowCount == 0 ? 1 : rowCount;
+  return headerHeight + dataRows * rowHeight;
+}
 
 /// Builds a [TrinaColumn] for the project's table surfaces.
 ///

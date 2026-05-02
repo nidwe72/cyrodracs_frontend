@@ -2,6 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:trina_grid/trina_grid.dart';
 import '../../theme/app_theme.dart';
 
+/// Single source of truth for TrinaGrid row metrics. Exposed so callers
+/// (e.g. embedded GRID's vertical-sizing helper per gridElement.md G1.6.8)
+/// can compute heights without dipping into Trina internals.
+const double kTrinaRowHeight = 44;
+
+/// Header height when the column has the project's two-row header
+/// (label row + per-column filter input row, per columnFilters.md CF1.1).
+const double kTrinaColumnHeightWithFilter = 88;
+
+/// Header height when columns have only the label row (no filter inputs).
+const double kTrinaColumnHeightNoFilter = 44;
+
 /// Project-wide [TrinaGridConfiguration] mapped onto [AppTheme] tokens.
 /// Used by both the ENTITY_LIST surface (`app_view.dart`) and the GRID
 /// DataFormElement surface (`form_renderer_view.dart`) so the migrated
@@ -12,7 +24,7 @@ import '../../theme/app_theme.dart';
 /// (two-row header), 44 otherwise. Caller passes the right value.
 TrinaGridConfiguration trinaGridConfigForApp({
   required double columnHeight,
-  double rowHeight = 44,
+  double rowHeight = kTrinaRowHeight,
 }) {
   return TrinaGridConfiguration(
     // Columns scale to fill the table's horizontal extent (using each

@@ -1414,10 +1414,12 @@ class _GridField extends StatefulWidget {
 class _GridFieldState extends State<_GridField> {
   bool _loading = false;
   String? _error;
-  int _page = 0;
-  final int _pageSize = 10;
-  int _totalCount = 0;
-  int _totalPages = 0;
+  // Backend baseline count: rows matching the effective filter with the
+  // userFilter stripped. Drives the (N of M) row-count badge per
+  // gridElement.md G1.6.9. The visible-count side of the badge reads
+  // _trinaRows.length directly (embedded GRIDs fetch all rows — no
+  // pagination per G1.6.8 — so totalCount and items.length agree).
+  int _baselineTotal = 0;
 
   // Per-column sort state (single column, replaces provider sortFields).
   String? _sortColumnKey;
@@ -1453,9 +1455,18 @@ class _GridFieldState extends State<_GridField> {
   /// each with metadata so the cell renderer knows to apply the
   /// pending styling (italic text, amber background, pending badge on
   /// the first cell of the first row, remove icon instead of edit/delete).
+  ///
+  /// Pending rows are subject to the same column-filter predicates as
+  /// committed rows, evaluated client-side per columnFilters.md CF1.5.1.
+  /// The original index is preserved on each surviving row so the
+  /// "remove pending" action keeps targeting the right entry.
   List<TrinaRow> _buildPendingTrinaRows() {
     final fieldKeys = widget.tableColumns.map((c) => c.key).toList();
-    return widget.pendingRows.asMap().entries.map((entry) {
+    return widget.pendingRows
+        .asMap()
+        .entries
+        .where((entry) => _pendingMatchesFilters(entry.value))
+        .map((entry) {
       final i = entry.key;
       final pending = entry.value;
       final entityForRow = <String, dynamic>{};
@@ -1468,6 +1479,98 @@ class _GridFieldState extends State<_GridField> {
         metadata: {'pending': true, 'pendingIndex': i},
       );
     }).toList();
+  }
+
+  /// True iff the pending row passes every active column filter,
+  /// matching server-side predicate semantics (columnFilters.md CF1.5.1).
+  /// Missing values fail the predicate (mirrors SQL's NULL-LIKE-anything
+  /// → UNKNOWN → false).
+  bool _pendingMatchesFilters(PendingChild pending) {
+    for (final entry in _columnFilters.entries) {
+      final key = entry.key;
+      final filterValue = entry.value;
+      final meta = _columnMeta[key];
+      if (meta == null) continue;
+      final cellValue = pending.values[key];
+      if (!_cellMatchesFilter(cellValue, filterValue, meta.filterType)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _cellMatchesFilter(
+      dynamic cellValue, dynamic filterValue, ColumnFilterType type) {
+    switch (type) {
+      case ColumnFilterType.string:
+        if (filterValue is! String || filterValue.isEmpty) return true;
+        if (cellValue == null) return false;
+        return cellValue
+            .toString()
+            .toLowerCase()
+            .contains(filterValue.toLowerCase());
+      case ColumnFilterType.number:
+        return _matchesNumberRange(cellValue, filterValue);
+      case ColumnFilterType.date:
+      case ColumnFilterType.yearMonth:
+      case ColumnFilterType.datetime:
+        return _matchesStringRange(cellValue, filterValue);
+      case ColumnFilterType.boolean:
+        if (filterValue is! bool) return true;
+        if (cellValue == null) return false;
+        if (cellValue is bool) return cellValue == filterValue;
+        final s = cellValue.toString().toLowerCase();
+        return (filterValue ? s == 'true' : s == 'false');
+      case ColumnFilterType.entityEnum:
+        if (filterValue is! String || filterValue.isEmpty) return true;
+        if (cellValue == null) return false;
+        return cellValue.toString() == filterValue;
+      case ColumnFilterType.entityRef:
+        if (filterValue is! Map || filterValue['id'] == null) return true;
+        if (cellValue == null) return false;
+        return cellValue.toString() == filterValue['id'].toString();
+      default:
+        return true;
+    }
+  }
+
+  bool _matchesNumberRange(dynamic cellValue, dynamic filterValue) {
+    if (filterValue is! Map) return true;
+    final fromStr = filterValue['from'];
+    final toStr = filterValue['to'];
+    final hasFrom = fromStr is String && fromStr.isNotEmpty;
+    final hasTo = toStr is String && toStr.isNotEmpty;
+    if (!hasFrom && !hasTo) return true;
+    if (cellValue == null) return false;
+    final cellNum = cellValue is num
+        ? cellValue
+        : num.tryParse(cellValue.toString());
+    if (cellNum == null) return false;
+    if (hasFrom) {
+      final from = num.tryParse(fromStr);
+      if (from != null && cellNum < from) return false;
+    }
+    if (hasTo) {
+      final to = num.tryParse(toStr);
+      if (to != null && cellNum > to) return false;
+    }
+    return true;
+  }
+
+  bool _matchesStringRange(dynamic cellValue, dynamic filterValue) {
+    // ISO date / yearMonth strings sort lexicographically — same trick
+    // the backend relies on for these column types.
+    if (filterValue is! Map) return true;
+    final from = filterValue['from'];
+    final to = filterValue['to'];
+    final hasFrom = from is String && from.isNotEmpty;
+    final hasTo = to is String && to.isNotEmpty;
+    if (!hasFrom && !hasTo) return true;
+    if (cellValue == null) return false;
+    final cellStr = cellValue.toString();
+    if (hasFrom && cellStr.compareTo(from) < 0) return false;
+    if (hasTo && cellStr.compareTo(to) > 0) return false;
+    return true;
   }
 
   /// Effective rows for the GRID — pending when the parent isn't saved
@@ -1668,10 +1771,9 @@ class _GridFieldState extends State<_GridField> {
       } else {
         _columnFilters[columnKey] = value;
       }
-      _page = 0;
     });
     _gridRebuildTrigger.bump();
-    _fetchData();
+    _refreshAfterFilterOrSortChange();
   }
 
   void _clearColumnFilters() {
@@ -1681,10 +1783,23 @@ class _GridFieldState extends State<_GridField> {
     }
     setState(() {
       _columnFilters.clear();
-      _page = 0;
     });
     _gridRebuildTrigger.bump();
-    _fetchData();
+    _refreshAfterFilterOrSortChange();
+  }
+
+  /// In edit mode, refetch from the backend (the userFilter / userSort just
+  /// changed). In create-new mode there is no backend query (entityId is
+  /// null and the GraphQL schema rejects null entityId); just bump the
+  /// generation so the keyed TrinaGrid remounts with the freshly-filtered
+  /// pending rows from `_effectiveRows()`. Per columnFilters.md CF1.5.1 the
+  /// pending-row filter is purely client-side — no round-trip needed.
+  void _refreshAfterFilterOrSortChange() {
+    if (widget.entityId != null) {
+      _fetchData();
+    } else {
+      setState(() => _gridGeneration++);
+    }
   }
 
   TextEditingController _ensureController(String columnKey, [String subkey = '']) {
@@ -1854,10 +1969,9 @@ class _GridFieldState extends State<_GridField> {
     setState(() {
       _sortColumnKey = next == null ? null : columnKey;
       _sortDirection = next;
-      _page = 0;
     });
     _gridRebuildTrigger.bump();
-    _fetchData();
+    _refreshAfterFilterOrSortChange();
   }
 
   Future<void> _fetchData() async {
@@ -1884,11 +1998,14 @@ class _GridFieldState extends State<_GridField> {
               ? [{'field': _sortColumnKey!, 'direction': _sortDirection!.wireValue}]
               : null;
       final userFilter = _composeUserFilter();
+      // Embedded GRIDs omit `size` so the backend treats it as "all rows"
+      // (gridElement.md G1.6.4). `baselineTotal` is the unfiltered count
+      // used by the (N of M) row-count badge per G1.6.9.
       final result = await graphqlClient.query(QueryOptions(
         document: gql(r'''
           query GridData($input: GridDataInput!) {
             gridData(input: $input) {
-              items totalCount page pageSize totalPages
+              items totalCount baselineTotal
             }
           }
         '''),
@@ -1898,8 +2015,6 @@ class _GridFieldState extends State<_GridField> {
             'elementCode': widget.elementCode,
             'entityId': widget.entityId,
             'formState': formStateEntries,
-            'page': _page,
-            'size': _pageSize,
             if (userSort != null) 'userSort': userSort,
             if (userFilter != null) 'userFilter': userFilter,
           },
@@ -1916,9 +2031,7 @@ class _GridFieldState extends State<_GridField> {
             .map((e) => buildTrinaRow(entity: e, fieldKeys: fieldKeys))
             .toList();
         _gridGeneration++;
-        _totalCount = (data['totalCount'] as num).toInt();
-        _page = (data['page'] as num).toInt();
-        _totalPages = (data['totalPages'] as num).toInt();
+        _baselineTotal = (data['baselineTotal'] as num?)?.toInt() ?? items.length;
         _loading = false;
       });
     } catch (e) {
@@ -1964,10 +2077,10 @@ class _GridFieldState extends State<_GridField> {
               child: Row(
                 children: [
                   Text(widget.label, style: AppTheme.panelHeaderTitle),
-                  if (!_loading && widget.entityId != null) ...[
+                  if (_rowCountBadge() != null) ...[
                     const SizedBox(width: AppTheme.spacingSm),
                     Text(
-                      '($_totalCount)',
+                      _rowCountBadge()!,
                       style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                     ),
                   ],
@@ -1982,7 +2095,11 @@ class _GridFieldState extends State<_GridField> {
                     ),
                   if (widget.onAddAction != null)
                     const SizedBox(width: AppTheme.spacingSm),
-                  if (widget.entityId != null)
+                  // Clear-filters is available whenever the GRID has any
+                  // filterable columns (independent of entityId), because
+                  // pending rows are filtered client-side too per
+                  // columnFilters.md CF1.5.1.
+                  if (_anyColumnFilterable)
                     IconButton(
                       icon: const Icon(Icons.filter_alt_off, size: AppTheme.iconSize),
                       tooltip: 'Clear filters',
@@ -1990,31 +2107,36 @@ class _GridFieldState extends State<_GridField> {
                       constraints: const BoxConstraints(),
                       onPressed: _hasActiveFilters ? _clearColumnFilters : null,
                     ),
-                  if (widget.entityId != null)
+                  if (_anyColumnFilterable)
                     const SizedBox(width: AppTheme.spacingSm),
+                  // Reload icon swaps for a same-sized spinner during any
+                  // refetch so users see "we're working" without the table
+                  // flickering away (gridElement.md G1.6.5 — Option A).
                   if (widget.entityId != null)
                     IconButton(
-                      icon: const Icon(Icons.refresh, size: AppTheme.iconSize),
+                      icon: _loading
+                          ? const SizedBox(
+                              width: AppTheme.iconSize,
+                              height: AppTheme.iconSize,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh, size: AppTheme.iconSize),
                       tooltip: 'Reload',
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
-                      onPressed: _fetchData,
+                      onPressed: _loading ? null : _fetchData,
                     ),
                 ],
               ),
             ),
           Container(height: 1, color: separatorColor),
-          // Content. Loading + error remain top-level branches that
-          // replace the table; otherwise a single TrinaGrid renders both
-          // pending (parent un-saved) and committed (parent saved) rows
-          // via row metadata + rowColorCallback. Empty state is selected
-          // by entityId for a context-appropriate message.
-          if (widget.entityId != null && _loading)
-            const Center(child: Padding(
-              padding: EdgeInsets.all(AppTheme.spacingLg),
-              child: CircularProgressIndicator(),
-            ))
-          else if (widget.entityId != null && _error != null)
+          // Errors replace the grid (rare, recoverable via Retry).
+          // Otherwise the GRID always renders — loading is signalled by
+          // the toolbar Reload→spinner swap (G1.6.5 / Option A); the
+          // empty-state message and the first-load spinner both render
+          // inside TrinaGrid's noRowsWidget at the same single-row
+          // height (G1.6.8).
+          if (widget.entityId != null && _error != null)
             Padding(
               padding: const EdgeInsets.all(AppTheme.spacingMd),
               child: Column(
@@ -2026,11 +2148,18 @@ class _GridFieldState extends State<_GridField> {
                 ],
               ),
             )
-          else ...[
-            // Bounded height: GRID lives inside a scrollable form, so
-            // Expanded would be unbounded — fixed SizedBox instead.
+          else
+            // Sized host: TrinaGrid is a virtualised list and needs a
+            // bounded parent. Height tracks the actual rendered row
+            // count (gridElement.md G1.6.8); rowCount==0 reserves one
+            // row for the empty/first-load state.
             SizedBox(
-              height: 320,
+              height: computeGridBodyHeight(
+                rowCount: _effectiveRows().length,
+                headerHeight: _anyColumnFilterable
+                    ? kTrinaColumnHeightWithFilter
+                    : kTrinaColumnHeightNoFilter,
+              ),
               width: double.infinity,
               child: TrinaGrid(
                 key: ValueKey(
@@ -2039,56 +2168,52 @@ class _GridFieldState extends State<_GridField> {
                 rows: _effectiveRows(),
                 rowColorCallback: _rowColor,
                 configuration: trinaGridConfigForApp(
-                  columnHeight: _anyColumnFilterable ? 88 : 44,
+                  columnHeight: _anyColumnFilterable
+                      ? kTrinaColumnHeightWithFilter
+                      : kTrinaColumnHeightNoFilter,
                 ),
-                noRowsWidget: Padding(
-                  padding: const EdgeInsets.all(AppTheme.spacingMd),
-                  child: Text(
-                    widget.entityId == null
-                        ? 'No entries yet. Use + to add.'
-                        : 'No entries.',
-                    style: const TextStyle(color: Colors.grey),
-                  ),
-                ),
+                // First-load: rows haven't arrived yet, no pending rows
+                // either → centred spinner sized to fit one row.
+                // Steady-state empty: contextual "no entries" message.
+                noRowsWidget: _loading && _effectiveRows().isEmpty
+                    ? const Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.all(AppTheme.spacingMd),
+                        child: Text(
+                          widget.entityId == null
+                              ? 'No entries yet. Use + to add.'
+                              : 'No entries.',
+                          style: const TextStyle(color: Colors.grey),
+                        ),
+                      ),
               ),
             ),
-            // Pagination
-            if (_totalPages > 1)
-              Container(
-                color: AppTheme.panelHeaderBackground,
-                padding: const EdgeInsets.only(
-                  top: AppTheme.spacingSm,
-                  bottom: AppTheme.spacingSm,
-                  right: AppTheme.spacingSm,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.first_page, size: AppTheme.iconSize),
-                      onPressed: _page > 0 ? () { _page = 0; _fetchData(); } : null,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left, size: AppTheme.iconSize),
-                      onPressed: _page > 0 ? () { _page--; _fetchData(); } : null,
-                    ),
-                    Text('Page ${_page + 1} of $_totalPages',
-                        style: const TextStyle(fontSize: 13)),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right, size: AppTheme.iconSize),
-                      onPressed: _page < _totalPages - 1 ? () { _page++; _fetchData(); } : null,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.last_page, size: AppTheme.iconSize),
-                      onPressed: _page < _totalPages - 1 ? () { _page = _totalPages - 1; _fetchData(); } : null,
-                    ),
-                  ],
-                ),
-              ),
-          ],
         ],
       ),
       ),
     );
+  }
+
+  /// Row-count badge per gridElement.md G1.6.9.
+  /// `N = visibleCommitted + visiblePending`,
+  /// `M = totalCommitted   + totalPending`. Returns null when both are
+  /// zero (the empty-state message owns the slot).
+  String? _rowCountBadge() {
+    final visibleCommitted = widget.entityId == null ? 0 : _trinaRows.length;
+    final totalCommitted = widget.entityId == null ? 0 : _baselineTotal;
+    final visiblePending =
+        widget.entityId == null ? _effectiveRows().length : 0;
+    final totalPending =
+        widget.entityId == null ? widget.pendingRows.length : 0;
+    final n = visibleCommitted + visiblePending;
+    final m = totalCommitted + totalPending;
+    if (n == 0 && m == 0) return null;
+    return n == m ? '($n)' : '($n of $m)';
   }
 }
